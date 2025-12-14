@@ -15,7 +15,7 @@ I built Kizuna because I was tired of having 500 files named `New Recording 32.m
 2.  **Contextualize** it with lyrics and chords.
 3.  **Collaborate** with my bandmates without sending zip files back and forth.
 
-This is an **Indie Hacker** project. It's Open Source, privacy-focused, and respects your freedom to self-host.
+This is a **hobby project**. That doesn't mean I don't care, it just means I don't earn money from it yet. It's Open Source, privacy-focused, and respects your freedom to self-host.
 
 ## ✨ Key Features
 
