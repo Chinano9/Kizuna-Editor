@@ -16,6 +16,8 @@ Thumbs.db
 *.dylib
 # test/output dirs
 vendor/
+# dev utils
+apply_license.sh
 
 # --- Node / Frontend (Wails) ---
 node_modules/
