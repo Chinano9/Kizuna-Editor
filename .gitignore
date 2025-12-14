@@ -1,0 +1,34 @@
+# --- System files ---
+.DS_Store
+Thumbs.db
+
+# --- Secrets ---
+.env
+.env.*
+*.local
+
+# --- Go ---
+# Binarios
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+# test/output dirs
+vendor/
+
+# --- Node / Frontend (Wails) ---
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# --- Wails Specific ---
+/client/build/bin/
+/client/frontend/dist/
+/client/wailsjs/
+
+# --- IDEs ---
+.vscode/
+.idea/
+.zed/
