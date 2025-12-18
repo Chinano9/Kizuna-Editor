@@ -24,6 +24,10 @@ node_modules/
 npm-debug.log
 yarn-error.log
 pnpm-debug.log
+# DB files
+*.sqlite
+*.sqlite3
+*.db
 
 # --- Wails Specific ---
 /client/build/bin/
