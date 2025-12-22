@@ -1,19 +1,17 @@
 <script lang="ts">
-    import Editor from "./components/Editor.svelte";
-    import Toolbar from "./components/Toolbar.svelte";
-    import ScoreViewer from "./components/ScoreViewer.svelte";
+    import { currentView } from "./stores/viewStore";
+
+    // Importamos los dos grandes componentes
+    import Dashboard from "@/components/Dashboard.svelte";
+    import EditorLayout from "@/layouts/EditorLayout.svelte";
 </script>
 
 <main>
-    <div class="editor-layout">
-        <Editor>
-            <div slot="toolbar">
-                <Toolbar />
-            </div>
-        </Editor>
-
-        <ScoreViewer />
-    </div>
+    {#if $currentView === "dashboard"}
+        <Dashboard />
+    {:else}
+        <EditorLayout />
+    {/if}
 </main>
 
 <style>

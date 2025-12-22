@@ -10,6 +10,7 @@
     "isolatedModules": true,
     "baseUrl": ".",
     "paths": {
+      "@/*": ["src/*"],
       "wailsjs/*": ["./wailsjs/*"]
     }
   },

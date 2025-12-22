@@ -39,21 +39,21 @@
         try {
             console.debug(`Saving project: "${currentTitle}"`);
 
-            // Call Go Backend
+            // Call backend to persist a quick idea and receive (possibly new) ID
             const newId = await SaveQuickIdea(
                 currentId,
                 currentTitle,
                 currentSource,
             );
 
-            // Update the store with the persisted ID from backend
+            // Persist returned ID to the store
             songId.set(newId);
 
-            // TODO: Replace native alert with a Toast notification for better UX
-            alert(`Saved successfully! ID: ${newId}`);
+            // TODO: Replace browser alert with app toast/notification for better UX
+            alert(`Saved successfully (ID: ${newId})`);
         } catch (err) {
             console.error("Failed to save project:", err);
-            alert("Error while saving.");
+            alert("Failed to save project.");
         }
     }
 </script>

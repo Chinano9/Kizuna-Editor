@@ -22,10 +22,12 @@ import (
 	"fmt"
 	"log"
 
-	_ "modernc.org/sqlite" // CGO-free SQLite driver
+	// Import shared models package (defines Song/Track structs used across client and server)
+	"kizuna/shared/models"
+
+	_ "modernc.org/sqlite"
 )
 
-// Constants for known Seed IDs (To avoid magic numbers)
 const (
 	InstrumentGuitarID = 1
 )
@@ -95,14 +97,12 @@ func (m *DBManager) SaveQuickIdea(songID int, title string, content string) int6
 		// --- CASE 2: EXISTING SONG (UPDATE) ---
 		finalID = int64(songID)
 
-		// A. Update Song Metadata
 		_, err := tx.Exec("UPDATE songs SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", title, songID)
 		if err != nil {
 			log.Println("Error updating song title:", err)
 			return 0
 		}
 
-		// B. Update Track Content
 		res, err := tx.Exec("UPDATE tracks SET data_content = ? WHERE song_id = ? AND instrument_id = ?", content, songID, InstrumentGuitarID)
 		if err != nil {
 			log.Println("Error updating track content:", err)
@@ -111,8 +111,6 @@ func (m *DBManager) SaveQuickIdea(songID int, title string, content string) int6
 
 		// Check if the track actually existed
 		rowsAffected, _ := res.RowsAffected()
-
-		// C. Edge Case: Song exists but has no tracks (Ghost Song) -> Create Track
 		if rowsAffected == 0 {
 			log.Printf("⚠️ Track missing for Song %d. Creating recovery track...", songID)
 			_, err = tx.Exec(`
@@ -127,7 +125,6 @@ func (m *DBManager) SaveQuickIdea(songID int, title string, content string) int6
 		}
 	}
 
-	// Commit the transaction to save changes to disk
 	if err := tx.Commit(); err != nil {
 		log.Println("Error committing transaction:", err)
 		return 0
@@ -136,11 +133,77 @@ func (m *DBManager) SaveQuickIdea(songID int, title string, content string) int6
 	return finalID
 }
 
+// --- Read helpers using shared models ---
+
+// GetSong retrieves a song and its associated tracks using the shared models.
+func (m *DBManager) GetSong(id int) (*models.Song, error) {
+	var s models.Song
+
+	// 1. Load song metadata from the songs table
+	querySong := `
+		SELECT id, album_id, title, bpm, time_signature, key_signature, created_at, updated_at
+		FROM songs WHERE id = ?`
+
+	row := m.db.QueryRow(querySong, id)
+
+	// Scan the row into the models.Song struct
+	err := row.Scan(
+		&s.ID, &s.AlbumID, &s.Title, &s.BPM,
+		&s.TimeSignature, &s.KeySignature,
+		&s.CreatedAt, &s.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Load tracks associated with the song
+	queryTracks := `
+		SELECT id, song_id, instrument_id, name, data_content, is_muted
+		FROM tracks WHERE song_id = ?`
+
+	rows, err := m.db.Query(queryTracks, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var t models.Track
+		// Scan each row into a models.Track struct
+		if err := rows.Scan(&t.ID, &t.SongID, &t.InstrumentID, &t.Name, &t.DataContent, &t.IsMuted); err != nil {
+			continue
+		}
+		s.Tracks = append(s.Tracks, t)
+	}
+
+	return &s, nil
+}
+
+// GetRecentSongs returns a lightweight list of recent songs for the dashboard.
+func (m *DBManager) GetRecentSongs() ([]models.Song, error) {
+	query := `SELECT id, title, updated_at FROM songs ORDER BY updated_at DESC LIMIT 10`
+	rows, err := m.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var songs []models.Song
+	for rows.Next() {
+		var s models.Song
+		// Only populate fields needed for the dashboard list (id, title, updated_at)
+		if err := rows.Scan(&s.ID, &s.Title, &s.UpdatedAt); err != nil {
+			continue
+		}
+		songs = append(songs, s)
+	}
+	return songs, nil
+}
+
 // --- PRIVATE HELPERS ---
 
 func createFullSchema(db *sql.DB) error {
 	queries := []string{
-		// 1. ALBUMS
 		`CREATE TABLE IF NOT EXISTS albums (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			title TEXT NOT NULL,
@@ -148,8 +211,6 @@ func createFullSchema(db *sql.DB) error {
 			description TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
-
-		// 2. SONGS (The central unit)
 		`CREATE TABLE IF NOT EXISTS songs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			album_id INTEGER,
@@ -161,30 +222,24 @@ func createFullSchema(db *sql.DB) error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE SET NULL
 		);`,
-
-		// 3. INSTRUMENTS (Catalog)
 		`CREATE TABLE IF NOT EXISTS instruments (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
-			type TEXT NOT NULL, -- 'String', 'Keys', 'Percussion'
+			type TEXT NOT NULL,
 			default_clef TEXT DEFAULT 'treble'
 		);`,
-
-		// 4. TRACKS (Where the music lives: AlphaTex)
 		`CREATE TABLE IF NOT EXISTS tracks (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			song_id INTEGER NOT NULL,
 			instrument_id INTEGER,
 			name TEXT,
-			data_content TEXT, -- ALPHATEX CODE GOES HERE
+			data_content TEXT,
 			display_mode TEXT DEFAULT 'BOTH',
 			is_muted BOOLEAN DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
 			FOREIGN KEY (instrument_id) REFERENCES instruments(id)
 		);`,
-
-		// 5. AUDIO VERSIONS (Exported MP3s/WAVs)
 		`CREATE TABLE IF NOT EXISTS audio_versions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			song_id INTEGER NOT NULL,

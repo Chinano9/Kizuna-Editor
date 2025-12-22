@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"kizuna/shared/models"
 	"log"
 )
 
@@ -63,4 +64,16 @@ func (a *App) SaveQuickIdea(id int, title string, content string) (int64, error)
 	// like: return 0, fmt.Errorf("database error")
 
 	return savedID, nil
+}
+
+// GetSong retrieves a song by its ID from the database.
+// Exposed to Wails (Frontend).
+func (a *App) GetSong(id int) (*models.Song, error) {
+	return a.db.GetSong(id)
+}
+
+// Gets all recent songs from the database.
+// Exposed to Wails (Frontend).
+func (a *App) GetRecentSongs() ([]models.Song, error) {
+	return a.db.GetRecentSongs()
 }

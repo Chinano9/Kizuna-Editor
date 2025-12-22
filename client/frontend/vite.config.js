@@ -1,16 +1,22 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
+import path from 'path'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [svelte()],
-  // AGREGAMOS ESTAS LÍNEAS:
-  optimizeDeps: {
-    esbuildOptions: {
+    plugins: [svelte()],
+    optimizeDeps: {
+        esbuildOptions: {
+            target: 'esnext'
+        }
+    },
+    resolve: {
+        alias: {
+            '@': path.resolve(__dirname, 'src'),
+            'wailsjs': path.resolve(__dirname, 'wailsjs')
+        }
+    },
+    build: {
         target: 'esnext'
     }
-  },
-  build: {
-    target: 'esnext'
-  }
 })

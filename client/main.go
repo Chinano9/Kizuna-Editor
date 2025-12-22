@@ -35,13 +35,13 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "Kizuna Editor", // Added space for better readability in taskbar
+		Title:  "Kizuna Editor", // Add a space for better readability in the taskbar
 		Width:  1200,            // Wider default for score viewing
 		Height: 800,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		// Sync Background Color with CSS (#1e1e1e) to avoid color flashing on startup
+		// Sync background color with CSS (#1e1e1e) to avoid flashing on startup
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 255},
 		OnStartup:        app.startup,
 		Bind: []interface{}{
@@ -50,6 +50,6 @@ func main() {
 	})
 
 	if err != nil {
-		log.Fatal("Error launching application:", err)
+		log.Fatal("Failed to launch application:", err)
 	}
 }
