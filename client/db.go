@@ -147,13 +147,28 @@ func (m *DBManager) GetSong(id int) (*models.Song, error) {
 	row := m.db.QueryRow(querySong, id)
 
 	// Scan the row into the models.Song struct
+	var ts sql.NullString
+	var ks sql.NullString
+
 	err := row.Scan(
 		&s.ID, &s.AlbumID, &s.Title, &s.BPM,
-		&s.TimeSignature, &s.KeySignature,
+		&ts, &ks,
 		&s.CreatedAt, &s.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	// Handle nullable string columns: convert sql.NullString to plain string.
+	if ts.Valid {
+		s.TimeSignature = ts.String
+	} else {
+		s.TimeSignature = ""
+	}
+	if ks.Valid {
+		s.KeySignature = ks.String
+	} else {
+		s.KeySignature = ""
 	}
 
 	// 2. Load tracks associated with the song
