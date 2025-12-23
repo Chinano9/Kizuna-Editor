@@ -3,12 +3,15 @@
 
     // Importamos los dos grandes componentes
     import Dashboard from "@/components/Dashboard.svelte";
+    import DashboardLayout from "@/layouts/DashboardLayout.svelte";
     import EditorLayout from "@/layouts/EditorLayout.svelte";
 </script>
 
 <main>
     {#if $currentView === "dashboard"}
-        <Dashboard />
+        <DashboardLayout>
+            <Dashboard />
+        </DashboardLayout>
     {:else}
         <EditorLayout />
     {/if}
@@ -42,11 +45,5 @@
         display: flex;
         background-color: #1e1e1e;
         color: white;
-    }
-
-    .editor-layout {
-        display: flex;
-        width: 100%;
-        height: 100%;
     }
 </style>

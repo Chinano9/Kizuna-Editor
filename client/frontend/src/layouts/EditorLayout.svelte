@@ -60,6 +60,7 @@
         display: flex;
         flex-direction: column;
         height: 100%;
+        width: 100%;
     }
 
     /* Small top bar for navigation */
@@ -90,5 +91,7 @@
         flex: 1;
         display: flex;
         overflow: hidden;
+        width: 100%;
+        height: 100%;
     }
 </style>
