@@ -44,6 +44,7 @@ func main() {
 		// Sync background color with CSS (#1e1e1e) to avoid flashing on startup
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 255},
 		OnStartup:        app.startup,
+		OnShutdown:       app.shutdown,
 		Bind: []interface{}{
 			app,
 		},

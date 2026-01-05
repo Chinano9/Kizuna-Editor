@@ -21,6 +21,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"runtime"
 
 	// Import shared models package (defines Song/Track structs used across client and server)
 	"kizuna/shared/models"
@@ -30,6 +33,8 @@ import (
 
 const (
 	InstrumentGuitarID = 1
+	defaultDBName      = "kizuna.db"
+	appFolderName      = "Kizuna"
 )
 
 // DBManager handles all direct database interactions.
@@ -38,18 +43,37 @@ type DBManager struct {
 }
 
 // NewDBManager initializes the SQLite connection and ensures the schema exists.
+// The database file is created inside the user's OS-appropriate data directory
+// (e.g. %APPDATA%/Kizuna on Windows, ~/Library/Application Support/Kizuna on macOS,
+// or XDG data dir (typically ~/.local/share) on Linux). If the path cannot be
+// resolved or created, it falls back to a local file in the current working directory.
 func NewDBManager() *DBManager {
-	db, err := sql.Open("sqlite", "kizuna.db")
+	dbPath, err := getDefaultDBPath()
+	if err != nil {
+		log.Println("Warning: couldn't determine default DB path:", err)
+		log.Println("Falling back to local file:", defaultDBName)
+		dbPath = defaultDBName
+	} else {
+		// Ensure the parent directory exists
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+			log.Println("Warning: couldn't create DB directory:", err)
+			log.Println("Falling back to local file:", defaultDBName)
+			dbPath = defaultDBName
+		}
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		log.Fatal("Failed to open database:", err)
 	}
 
-	// 1. Initialize Schema
+	// Initialize Schema
 	if err := createFullSchema(db); err != nil {
+		db.Close()
 		log.Fatal("Failed to create schema:", err)
 	}
 
-	// 2. Seed Initial Data
+	// Seed Initial Data (non-fatal)
 	if err := seedInstruments(db); err != nil {
 		log.Println("Warning: Failed to seed instruments:", err)
 	}
@@ -57,96 +81,99 @@ func NewDBManager() *DBManager {
 	return &DBManager{db: db}
 }
 
+// Close safely closes the underlying database connection.
+func (m *DBManager) Close() error {
+	if m == nil || m.db == nil {
+		return nil
+	}
+	return m.db.Close()
+}
+
 // SaveQuickIdea handles the "Upsert" logic for the editor.
 // It uses transactions to ensure data integrity between Songs and Tracks.
 func (m *DBManager) SaveQuickIdea(songID int, title string, content string) (int64, error) {
-	// Start a transaction. If anything fails, we Rollback.
+	if m == nil || m.db == nil {
+		return 0, fmt.Errorf("database is not initialized")
+	}
+
 	tx, err := m.db.Begin()
 	if err != nil {
-		log.Println("Error starting transaction:", err)
-		return 0
+		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
-	// Defer a rollback in case of panic or error (ignored if Commit is called)
-	defer tx.Rollback()
+	defer func() {
+		// If an error occurred and tx is still active, ensure rollback.
+		_ = tx.Rollback()
+	}()
 
 	var finalID int64
 
-	// --- CASE 1: NEW SONG (INSERT) ---
 	if songID == 0 {
-		// A. Create Song
 		res, err := tx.Exec("INSERT INTO songs (title, bpm) VALUES (?, ?)", title, 120)
 		if err != nil {
-			log.Println("Error inserting song:", err)
-			return 0
+			return 0, fmt.Errorf("insert song: %w", err)
+		}
+		finalID, err = res.LastInsertId()
+		if err != nil {
+			return 0, fmt.Errorf("last insert id (song): %w", err)
 		}
 
-		finalID, _ = res.LastInsertId()
-
-		// B. Create Default Track (Guitar)
 		_, err = tx.Exec(`
 			INSERT INTO tracks (song_id, instrument_id, name, data_content)
 			VALUES (?, ?, ?, ?)`,
 			finalID, InstrumentGuitarID, "Lead Guitar", content)
-
 		if err != nil {
-			log.Println("Error inserting initial track:", err)
-			return 0
+			return 0, fmt.Errorf("insert initial track: %w", err)
 		}
-
 	} else {
-		// --- CASE 2: EXISTING SONG (UPDATE) ---
 		finalID = int64(songID)
 
 		_, err := tx.Exec("UPDATE songs SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", title, songID)
 		if err != nil {
-			log.Println("Error updating song title:", err)
-			return 0
+			return 0, fmt.Errorf("update song title: %w", err)
 		}
 
 		res, err := tx.Exec("UPDATE tracks SET data_content = ? WHERE song_id = ? AND instrument_id = ?", content, songID, InstrumentGuitarID)
 		if err != nil {
-			log.Println("Error updating track content:", err)
-			return 0
+			return 0, fmt.Errorf("update track content: %w", err)
 		}
 
-		// Check if the track actually existed
-		rowsAffected, _ := res.RowsAffected()
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("rows affected check: %w", err)
+		}
 		if rowsAffected == 0 {
 			log.Printf("⚠️ Track missing for Song %d. Creating recovery track...", songID)
 			_, err = tx.Exec(`
 				INSERT INTO tracks (song_id, instrument_id, name, data_content)
 				VALUES (?, ?, ?, ?)`,
 				songID, InstrumentGuitarID, "Lead Guitar", content)
-
 			if err != nil {
-				log.Println("Error creating recovery track:", err)
-				return 0
+				return 0, fmt.Errorf("create recovery track: %w", err)
 			}
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Println("Error committing transaction:", err)
-		return 0
+		return 0, fmt.Errorf("commit transaction: %w", err)
 	}
 
-	return finalID
+	return finalID, nil
 }
-
-// --- Read helpers using shared models ---
 
 // GetSong retrieves a song and its associated tracks using the shared models.
 func (m *DBManager) GetSong(id int) (*models.Song, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+
 	var s models.Song
 
-	// 1. Load song metadata from the songs table
 	querySong := `
 		SELECT id, album_id, title, bpm, time_signature, key_signature, created_at, updated_at
 		FROM songs WHERE id = ?`
 
 	row := m.db.QueryRow(querySong, id)
 
-	// Scan the row into the models.Song struct
 	var ts sql.NullString
 	var ks sql.NullString
 
@@ -159,7 +186,6 @@ func (m *DBManager) GetSong(id int) (*models.Song, error) {
 		return nil, err
 	}
 
-	// Handle nullable string columns: convert sql.NullString to plain string.
 	if ts.Valid {
 		s.TimeSignature = ts.String
 	} else {
@@ -171,9 +197,8 @@ func (m *DBManager) GetSong(id int) (*models.Song, error) {
 		s.KeySignature = ""
 	}
 
-	// 2. Load tracks associated with the song
 	queryTracks := `
-		SELECT id, song_id, instrument_id, name, data_content, is_muted
+		SELECT id, song_id, instrument_id, name, data_content, display_mode, is_muted, created_at
 		FROM tracks WHERE song_id = ?`
 
 	rows, err := m.db.Query(queryTracks, id)
@@ -184,8 +209,8 @@ func (m *DBManager) GetSong(id int) (*models.Song, error) {
 
 	for rows.Next() {
 		var t models.Track
-		// Scan each row into a models.Track struct
-		if err := rows.Scan(&t.ID, &t.SongID, &t.InstrumentID, &t.Name, &t.DataContent, &t.IsMuted); err != nil {
+		if err := rows.Scan(&t.ID, &t.SongID, &t.InstrumentID, &t.Name, &t.DataContent, &t.DisplayMode, &t.IsMuted, &t.CreatedAt); err != nil {
+			// skip malformed row but continue
 			continue
 		}
 		s.Tracks = append(s.Tracks, t)
@@ -196,6 +221,10 @@ func (m *DBManager) GetSong(id int) (*models.Song, error) {
 
 // GetRecentSongs returns a lightweight list of recent songs for the dashboard.
 func (m *DBManager) GetRecentSongs() ([]models.Song, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+
 	query := `SELECT id, title, updated_at FROM songs ORDER BY updated_at DESC LIMIT 10`
 	rows, err := m.db.Query(query)
 	if err != nil {
@@ -206,7 +235,6 @@ func (m *DBManager) GetRecentSongs() ([]models.Song, error) {
 	var songs []models.Song
 	for rows.Next() {
 		var s models.Song
-		// Only populate fields needed for the dashboard list (id, title, updated_at)
 		if err := rows.Scan(&s.ID, &s.Title, &s.UpdatedAt); err != nil {
 			continue
 		}
@@ -278,6 +306,7 @@ func seedInstruments(db *sql.DB) error {
 	var count int
 	err := db.QueryRow("SELECT COUNT(*) FROM instruments").Scan(&count)
 	if err != nil {
+		// If the table doesn't exist yet, return nil so caller can decide.
 		return err
 	}
 
@@ -297,4 +326,42 @@ func seedInstruments(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// getDefaultDBPath returns a sensible default path for the database depending on OS.
+func getDefaultDBPath() (string, error) {
+	switch runtime.GOOS {
+	case "windows":
+		appdata := os.Getenv("APPDATA")
+		if appdata == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+			appdata = filepath.Join(home, "AppData", "Roaming")
+		}
+		return filepath.Join(appdata, appFolderName, defaultDBName), nil
+	case "darwin":
+		// macOS: ~/Library/Application Support
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			home, herr := os.UserHomeDir()
+			if herr != nil {
+				return "", err
+			}
+			configDir = filepath.Join(home, "Library", "Application Support")
+		}
+		return filepath.Join(configDir, appFolderName, defaultDBName), nil
+	default:
+		// Linux / other: prefer XDG_DATA_HOME, otherwise ~/.local/share
+		xdg := os.Getenv("XDG_DATA_HOME")
+		if xdg != "" {
+			return filepath.Join(xdg, appFolderName, defaultDBName), nil
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, ".local", "share", appFolderName, defaultDBName), nil
+	}
 }

@@ -80,3 +80,17 @@ func (a *App) GetSong(id int) (*models.Song, error) {
 func (a *App) GetRecentSongs() ([]models.Song, error) {
 	return a.db.GetRecentSongs()
 }
+
+// shutdown is called when the app is shutting down.
+// It attempts to close the DB connection cleanly. Wails will call this if
+// you set OnShutdown to this method in main.
+func (a *App) shutdown(ctx context.Context) error {
+	if a.db != nil {
+		if err := a.db.Close(); err != nil {
+			log.Println("Error closing DB during shutdown:", err)
+			return err
+		}
+	}
+	log.Println("App shutdown complete")
+	return nil
+}
