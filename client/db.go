@@ -59,7 +59,7 @@ func NewDBManager() *DBManager {
 
 // SaveQuickIdea handles the "Upsert" logic for the editor.
 // It uses transactions to ensure data integrity between Songs and Tracks.
-func (m *DBManager) SaveQuickIdea(songID int, title string, content string) int64 {
+func (m *DBManager) SaveQuickIdea(songID int, title string, content string) (int64, error) {
 	// Start a transaction. If anything fails, we Rollback.
 	tx, err := m.db.Begin()
 	if err != nil {
