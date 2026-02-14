@@ -1,101 +1,123 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    // Ajusta la ruta de importación según tu estructura (si usas alias @ o relativa)
     import { GetRecentSongs } from "wailsjs/go/main/App";
     import type { models } from "wailsjs/go/models";
 
-    import { songId, songTitle, trackSource } from "../stores/projectStore";
+    import { songId } from "../stores/projectStore";
     import { currentView } from "../stores/viewStore";
 
     let recentSongs: models.Song[] = [];
-
-    // 1. CORRECCIÓN: Declaramos la variable de estado
-    let isLoading = true;
 
     onMount(async () => {
         try {
             recentSongs = await GetRecentSongs();
         } catch (err) {
-            console.error("Error loading songs:", err);
-        } finally {
-            // 2. CORRECCIÓN: Apagamos el loading al terminar
-            isLoading = false;
+            console.error("Failed to load recent songs:", err);
         }
     });
 
-    function openSong(song: models.Song) {
-        songId.set(song.id);
-        songTitle.set(song.title);
+    function newSong() {
+        // Setting songId to 0 signals the editor to create a new song
+        songId.set(0);
         currentView.set("editor");
     }
 
-    function createNew() {
-        songId.set(0);
-        songTitle.set("New Song");
-        // 3. CORRECCIÓN: Usamos el template "blindado" con afinación explícita
-        // para evitar los errores de percusión que vimos antes.
-        trackSource.set('\\title "New" \n\\tuning E5 B4 G4 D4 A3 E3\n.\n:4 ');
+    function openSong(songToOpen: models.Song) {
+        // Set the ID of the song to open
+        songId.set(songToOpen.id);
+        // Switch to the editor view
         currentView.set("editor");
     }
 </script>
 
-<div class="view-content">
-    <header class="view-header">
-        <h2>Recent Projects</h2>
-        <button class="btn-new" on:click={createNew}>+ Create New Song</button>
+<div class="dashboard-container">
+    <header>
+        <h1>Kizuna Editor</h1>
+        <p>Your local-first songwriting environment.</p>
     </header>
 
-    <div class="scroll-area">
-        {#if isLoading}
-            <div class="loading">Loading library...</div>
+    <div class="main-actions">
+        <button class="action-btn" on:click={newSong}>+ New Idea</button>
+    </div>
+
+    <section class="recent-work">
+        <h2>Recent Work</h2>
+        {#if recentSongs.length === 0}
+            <p>No recent songs found. Start a new idea!</p>
         {:else}
             <div class="grid">
                 {#each recentSongs as song}
-                    <div class="card" on:click={() => openSong(song)}>
+                    <div
+                        class="card"
+                        on:click={() => openSong(song)}
+                        on:keydown={(e) => e.key === "Enter" && openSong(song)}
+                        role="button"
+                        tabindex="0"
+                    >
                         <div class="card-info">
                             <h3>{song.title}</h3>
                             <span class="date"
-                                >{new Date(
+                                >Last updated: {new Date(
                                     song.updated_at,
                                 ).toLocaleDateString()}</span
                             >
                         </div>
                     </div>
-                {:else}
-                    <div class="empty-state">
-                        <p>No hay canciones guardadas.</p>
-                    </div>
                 {/each}
             </div>
         {/if}
-    </div>
+    </section>
 </div>
 
 <style>
-    .view-content {
-        display: flex;
-        flex-direction: column;
-        height: 100%;
+    .dashboard-container {
+        width: 100%;
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 40px 20px;
+        color: #e0e0e0;
     }
 
-    .view-header {
-        padding: 20px 40px;
-        border-bottom: 1px solid #333;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
+    header {
+        text-align: center;
+        margin-bottom: 40px;
     }
-    .view-header h2 {
+
+    header h1 {
+        font-size: 2.5rem;
         margin: 0;
-        font-weight: 400;
-        font-size: 1.5rem;
-        color: #eee;
+        color: white;
     }
 
-    .scroll-area {
-        flex: 1;
-        overflow-y: auto;
-        padding: 40px;
+    header p {
+        font-size: 1.1rem;
+        color: #a0a0a0;
+    }
+
+    .main-actions {
+        text-align: center;
+        margin-bottom: 50px;
+    }
+
+    .action-btn {
+        background-color: #007acc;
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        font-size: 1rem;
+        font-weight: bold;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+    }
+    .action-btn:hover {
+        background-color: #005a9e;
+    }
+
+    .recent-work h2 {
+        border-bottom: 1px solid #444;
+        padding-bottom: 10px;
+        margin-bottom: 20px;
     }
 
     .grid {
@@ -105,62 +127,30 @@
     }
 
     .card {
-        background-color: #252526;
+        background-color: #2a2a2e;
+        border: 1px solid #3a3a3e;
+        border-radius: 5px;
         padding: 20px;
-        border-radius: 8px;
         cursor: pointer;
-        border: 1px solid transparent;
         transition:
-            transform 0.2s,
-            background 0.2s,
-            border-color 0.2s;
-        display: flex;
-        align-items: center;
-        gap: 15px;
+            transform 0.2s ease,
+            background-color 0.2s ease,
+            border-color 0.2s ease;
     }
 
     .card:hover {
         transform: translateY(-3px);
         background-color: #2d2d2e;
-        border-color: #4ec9b0;
-    }
-
-    .card-icon {
-        font-size: 2rem;
-        opacity: 0.5;
+        border-color: #007acc;
     }
 
     .card-info h3 {
-        margin: 0 0 5px 0;
-        font-size: 1.1rem;
+        margin: 0 0 10px 0;
         color: white;
     }
+
     .card-info .date {
         font-size: 0.8rem;
         color: #888;
-    }
-
-    .btn-new {
-        background: #0e639c;
-        border: none;
-        padding: 10px 20px;
-        font-size: 1rem;
-        cursor: pointer;
-        color: white;
-        font-weight: bold;
-        border-radius: 4px;
-        transition: background 0.2s;
-    }
-    .btn-new:hover {
-        background: #1177bb;
-    }
-
-    .loading,
-    .empty-state {
-        text-align: center;
-        color: #888;
-        margin-top: 40px;
-        font-style: italic;
-        font-size: 1.1rem;
     }
 </style>

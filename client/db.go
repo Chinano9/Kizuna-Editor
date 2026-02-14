@@ -219,6 +219,87 @@ func (m *DBManager) GetSong(id int) (*models.Song, error) {
 	return &s, nil
 }
 
+// AddTrack creates a new track for a song with default values.
+func (m *DBManager) AddTrack(songID int, trackName string) (*models.Track, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+
+	const defaultContent = `\title "New Track"`
+	const defaultInstrumentID = 1 // Default to Electric Guitar
+
+	query := `
+		INSERT INTO tracks (song_id, instrument_id, name, data_content)
+		VALUES (?, ?, ?, ?)`
+
+	res, err := m.db.Exec(query, songID, defaultInstrumentID, trackName, defaultContent)
+	if err != nil {
+		return nil, fmt.Errorf("insert new track: %w", err)
+	}
+
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("get last insert id for track: %w", err)
+	}
+
+	// Retrieve the newly created track to return it
+	var newTrack models.Track
+	err = m.db.QueryRow("SELECT id, song_id, instrument_id, name, data_content, display_mode, is_muted, created_at FROM tracks WHERE id = ?", newID).Scan(
+		&newTrack.ID, &newTrack.SongID, &newTrack.InstrumentID, &newTrack.Name, &newTrack.DataContent, &newTrack.DisplayMode, &newTrack.IsMuted, &newTrack.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("retrieve new track: %w", err)
+	}
+
+	return &newTrack, nil
+}
+
+// DeleteTrack removes a track by its ID.
+func (m *DBManager) DeleteTrack(trackID int) error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("database is not initialized")
+	}
+
+	_, err := m.db.Exec("DELETE FROM tracks WHERE id = ?", trackID)
+	if err != nil {
+		return fmt.Errorf("delete track: %w", err)
+	}
+	return nil
+}
+
+// UpdateTrack updates all fields of a given track.
+func (m *DBManager) UpdateTrack(track *models.Track) error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("database is not initialized")
+	}
+	if track == nil {
+		return fmt.Errorf("track cannot be nil")
+	}
+
+	query := `
+		UPDATE tracks SET
+			name = ?,
+			data_content = ?,
+			instrument_id = ?,
+			display_mode = ?,
+			is_muted = ?
+		WHERE id = ?`
+
+	_, err := m.db.Exec(query,
+		track.Name,
+		track.DataContent,
+		track.InstrumentID,
+		track.DisplayMode,
+		track.IsMuted,
+		track.ID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("update track: %w", err)
+	}
+	return nil
+}
+
 // GetRecentSongs returns a lightweight list of recent songs for the dashboard.
 func (m *DBManager) GetRecentSongs() ([]models.Song, error) {
 	if m == nil || m.db == nil {
@@ -241,6 +322,134 @@ func (m *DBManager) GetRecentSongs() ([]models.Song, error) {
 		songs = append(songs, s)
 	}
 	return songs, nil
+}
+
+// GetInstruments retrieves all available instruments from the database.
+func (m *DBManager) GetInstruments() ([]models.Instrument, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+
+	query := `SELECT id, name, type, default_clef FROM instruments ORDER BY name`
+	rows, err := m.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var instruments []models.Instrument
+	for rows.Next() {
+		var i models.Instrument
+		if err := rows.Scan(&i.ID, &i.Name, &i.Type, &i.DefaultClef); err != nil {
+			log.Printf("Error scanning instrument row: %v", err)
+			continue
+		}
+		instruments = append(instruments, i)
+	}
+	return instruments, nil
+}
+
+// SaveSong handles the full "Upsert" logic for a song and its associated tracks.
+// It uses a transaction to ensure data integrity.
+func (m *DBManager) SaveSong(song *models.Song) (*models.Song, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	// Defer a rollback. It will be ignored if the transaction is committed.
+	defer tx.Rollback()
+
+	// --- Step 1: Upsert the Song ---
+	if song.ID == 0 {
+		// INSERT new song
+		res, err := tx.Exec("INSERT INTO songs (title, bpm, time_signature, key_signature) VALUES (?, ?, ?, ?)",
+			song.Title, song.BPM, song.TimeSignature, song.KeySignature)
+		if err != nil {
+			return nil, fmt.Errorf("insert song: %w", err)
+		}
+		newID, err := res.LastInsertId()
+		if err != nil {
+			return nil, fmt.Errorf("get last insert id for song: %w", err)
+		}
+		song.ID = int(newID)
+	} else {
+		// UPDATE existing song
+		_, err := tx.Exec("UPDATE songs SET title = ?, bpm = ?, time_signature = ?, key_signature = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+			song.Title, song.BPM, song.TimeSignature, song.KeySignature, song.ID)
+		if err != nil {
+			return nil, fmt.Errorf("update song: %w", err)
+		}
+	}
+
+	// --- Step 2: Handle Deleted Tracks ---
+	// Get all track IDs currently in the DB for this song
+	rows, err := tx.Query("SELECT id FROM tracks WHERE song_id = ?", song.ID)
+	if err != nil {
+		return nil, fmt.Errorf("query existing track ids: %w", err)
+	}
+	existingTrackIDs := make(map[int]bool)
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan existing track id: %w", err)
+		}
+		existingTrackIDs[id] = true
+	}
+	rows.Close()
+
+	// Find which tracks to delete
+	incomingTrackIDs := make(map[int]bool)
+	for _, track := range song.Tracks {
+		if track.ID != 0 {
+			incomingTrackIDs[track.ID] = true
+		}
+	}
+
+	for id := range existingTrackIDs {
+		if !incomingTrackIDs[id] {
+			// This ID exists in the DB but not in the incoming song object; delete it.
+			_, err := tx.Exec("DELETE FROM tracks WHERE id = ?", id)
+			if err != nil {
+				return nil, fmt.Errorf("delete track %d: %w", id, err)
+			}
+		}
+	}
+
+	// --- Step 3: Upsert Tracks ---
+	for i := range song.Tracks {
+		track := &song.Tracks[i] // Use a pointer to modify the track in the slice
+		if track.ID == 0 {
+			// INSERT new track
+			res, err := tx.Exec("INSERT INTO tracks (song_id, instrument_id, name, data_content, display_mode, is_muted) VALUES (?, ?, ?, ?, ?, ?)",
+				song.ID, track.InstrumentID, track.Name, track.DataContent, track.DisplayMode, track.IsMuted)
+			if err != nil {
+				return nil, fmt.Errorf("insert track: %w", err)
+			}
+			newID, err := res.LastInsertId()
+			if err != nil {
+				return nil, fmt.Errorf("get last insert id for track: %w", err)
+			}
+			track.ID = int(newID) // Update the ID in the original object
+		} else {
+			// UPDATE existing track
+			_, err := tx.Exec("UPDATE tracks SET instrument_id = ?, name = ?, data_content = ?, display_mode = ?, is_muted = ? WHERE id = ?",
+				track.InstrumentID, track.Name, track.DataContent, track.DisplayMode, track.IsMuted, track.ID)
+			if err != nil {
+				return nil, fmt.Errorf("update track %d: %w", track.ID, err)
+			}
+		}
+	}
+
+	// --- Step 4: Commit Transaction ---
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return song, nil
 }
 
 // --- PRIVATE HELPERS ---

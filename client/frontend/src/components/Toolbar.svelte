@@ -17,40 +17,27 @@
         along with this program.  If not, see <https://www.gnu.org/licenses/>.
     */
     import { get } from "svelte/store";
-    import { SaveQuickIdea } from "../../wailsjs/go/main/App";
-    import {
-        songId,
-        songTitle,
-        trackSource,
-        autoBar,
-    } from "../stores/projectStore";
+    import { SaveSong } from "../../wailsjs/go/main/App";
+    import { song, autoBar } from "../stores/projectStore";
 
     async function save() {
-        // Snapshot current state from stores without subscribing
-        const currentTitle = get(songTitle);
-        const currentSource = get(trackSource);
-        const currentId = get(songId);
-
-        if (!currentSource) {
-            console.warn("Attempted to save without a track source.");
+        const currentSong = get(song);
+        if (!currentSong) {
+            alert("No song data to save.");
             return;
         }
 
         try {
-            console.debug(`Saving project: "${currentTitle}"`);
+            console.log("Saving song object:", currentSong);
 
-            // Call backend to persist a quick idea and receive (possibly new) ID
-            const newId = await SaveQuickIdea(
-                currentId,
-                currentTitle,
-                currentSource,
-            );
+            // Call the new backend function
+            const updatedSong = await SaveSong(currentSong);
 
-            // Persist returned ID to the store
-            songId.set(newId);
+            // Update the store with the returned object, which contains new IDs
+            song.set(updatedSong);
 
             // TODO: Replace browser alert with app toast/notification for better UX
-            alert(`Saved successfully (ID: ${newId})`);
+            alert(`Saved successfully (ID: ${updatedSong.id})`);
         } catch (err) {
             console.error("Failed to save project:", err);
             alert("Failed to save project.");
@@ -59,12 +46,14 @@
 </script>
 
 <div class="panel-header control-bar">
-    <input
-        type="text"
-        class="title-input"
-        bind:value={$songTitle}
-        placeholder="Song Title..."
-    />
+    {#if $song}
+        <input
+            type="text"
+            class="title-input"
+            bind:value={$song.title}
+            placeholder="Song Title..."
+        />
+    {/if}
 
     <div class="actions">
         <label class="toggle-switch">
@@ -77,10 +66,11 @@
 
 <style>
     .panel-header {
-        background-color: #252526;
-        color: #ccc;
+        background-color: var(--editor-bg);
+        color: var(--editor-text);
         padding: 10px 15px;
-        border-bottom: 1px solid #333;
+        border-bottom: 1px solid var(--editor-border);
+        font-family: var(--editor-font);
 
         /* Layout stability */
         flex-shrink: 0; /* Prevents the editor area from compressing the header */
@@ -100,16 +90,18 @@
     .title-input {
         background: transparent;
         border: none;
-        color: white;
+        color: var(--editor-text);
+        text-shadow: 0 0 5px var(--editor-text);
         font-size: 1rem;
         font-weight: bold;
         width: 100%;
         outline: none;
         border-bottom: 1px solid transparent;
+        border-bottom-color: var(--editor-text);
     }
 
     .title-input:focus {
-        border-bottom-color: #4ec9b0;
+        border-bottom-color: var(--editor-text);
     }
 
     .actions {
@@ -119,9 +111,10 @@
     }
 
     .save-btn {
-        background-color: #0e639c;
-        color: white;
-        border: none;
+        background-color: var(--editor-border);
+        color: var(--editor-text);
+        text-shadow: 0 0 5px var(--editor-text);
+        border: 1px solid var(--editor-text);
         padding: 6px 12px;
         border-radius: 4px;
         cursor: pointer;
@@ -129,7 +122,8 @@
     }
 
     .save-btn:hover {
-        background-color: #1177bb;
+        background-color: var(--editor-text);
+        color: var(--editor-bg);
     }
 
     .toggle-switch {
@@ -137,7 +131,8 @@
         align-items: center;
         cursor: pointer;
         font-size: 0.8rem;
-        color: #4ec9b0;
+        color: var(--editor-text);
+        text-shadow: 0 0 5px var(--editor-text);
         white-space: nowrap;
     }
 

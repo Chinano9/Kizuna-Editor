@@ -1,10 +1,18 @@
 <script lang="ts">
+    import { onMount } from "svelte";
     import { currentView } from "./stores/viewStore";
+    import { instrumentStore } from "./stores/instrumentStore";
+
+    // Load global data on startup
+    onMount(() => {
+        instrumentStore.load();
+    });
 
     // Importamos los dos grandes componentes
     import Dashboard from "@/components/Dashboard.svelte";
     import DashboardLayout from "@/layouts/DashboardLayout.svelte";
     import EditorLayout from "@/layouts/EditorLayout.svelte";
+    import "./styles/main.css";
 </script>
 
 <main>
@@ -19,16 +27,6 @@
 
 <style>
     /* --- Global Styles & Resources --- */
-
-    /* Register Bravura font.
-       Essential for AlphaTab to render musical symbols correctly.
-    */
-    @font-face {
-        font-family: "alphaTab";
-        src: url("/font/Bravura.woff2?v=1") format("woff2");
-        font-weight: normal;
-        font-style: normal;
-    }
 
     :global(body) {
         margin: 0;

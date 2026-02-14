@@ -75,6 +75,50 @@ func (a *App) GetSong(id int) (*models.Song, error) {
 	return a.db.GetSong(id)
 }
 
+// AddTrack creates a new track for a given song.
+// Exposed to Wails (Frontend).
+func (a *App) AddTrack(songID int, trackName string) (*models.Track, error) {
+	log.Printf("Adding new track '%s' to song ID %d", trackName, songID)
+	return a.db.AddTrack(songID, trackName)
+}
+
+// DeleteTrack removes a track from the database.
+// Exposed to Wails (Frontend).
+func (a *App) DeleteTrack(trackID int) error {
+	log.Printf("Deleting track ID %d", trackID)
+	return a.db.DeleteTrack(trackID)
+}
+
+// UpdateTrack updates the details of an existing track.
+// Exposed to Wails (Frontend).
+func (a *App) UpdateTrack(track *models.Track) error {
+	if track == nil {
+		log.Println("UpdateTrack called with nil track")
+		return nil // Or return an error
+	}
+	log.Printf("Updating track ID %d with name '%s'", track.ID, track.Name)
+	return a.db.UpdateTrack(track)
+}
+
+// GetInstruments retrieves all available instruments from the database.
+// Exposed to Wails (Frontend).
+func (a *App) GetInstruments() ([]models.Instrument, error) {
+	return a.db.GetInstruments()
+}
+
+// SaveSong saves the entire song object, including all its tracks.
+// This is the new primary save method.
+// Exposed to Wails (Frontend).
+func (a *App) SaveSong(song *models.Song) (*models.Song, error) {
+	if song == nil {
+		log.Println("SaveSong called with a nil song object.")
+		// Or return an error: return nil, errors.New("cannot save a nil song")
+		return nil, nil
+	}
+	log.Printf("Saving full song object for '%s' (ID: %d)", song.Title, song.ID)
+	return a.db.SaveSong(song)
+}
+
 // Gets all recent songs from the database.
 // Exposed to Wails (Frontend).
 func (a *App) GetRecentSongs() ([]models.Song, error) {

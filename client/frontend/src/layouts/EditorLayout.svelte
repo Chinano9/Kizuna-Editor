@@ -1,38 +1,73 @@
 <script lang="ts">
-    import { onMount } from "svelte";
     import { GetSong } from "../../wailsjs/go/main/App";
 
     import Toolbar from "@/components/Toolbar.svelte";
     import Editor from "@/components/Editor.svelte";
     import ScoreViewer from "@/components/ScoreViewer.svelte";
+    import TrackTabs from "@/components/TrackTabs.svelte";
 
-    import { songId, trackSource } from "@/stores/projectStore";
+    import { songId, song } from "@/stores/projectStore";
     import { currentView } from "@/stores/viewStore";
+    import { activeTrackIndex } from "@/stores/trackStore";
+    import type { main } from "../../wailsjs/go/models";
 
-    // Data loading logic
-    onMount(async () => {
-        const id = $songId;
+    let activeTrack: main.Track | null = null;
 
-        // If ID is 0 the song is new — nothing to load from the DB
-        if (id === 0) return;
+    // --- Reactive Data Loading ---
+    $: {
+        loadSong($songId);
+    }
+
+    async function loadSong(id: number) {
+        if (id === 0) {
+            // Create a default structure for a new song
+            const newTrack: main.Track = {
+                id: 0,
+                song_id: 0,
+                instrument_id: 1, // Default to guitar
+                name: "Track 1",
+                data_content: '\\title "New Song"\\n.',
+                display_mode: "BOTH",
+                is_muted: false,
+                created_at: new Date().toISOString(),
+            };
+            const newSong: main.Song = {
+                id: 0,
+                title: "My New Idea",
+                tracks: [newTrack],
+                // Set other defaults as needed
+                album_id: null,
+                bpm: 120,
+                time_signature: "4/4",
+                key_signature: "",
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+            };
+            song.set(newSong);
+            activeTrackIndex.set(0);
+            return;
+        }
 
         try {
             console.log("Loading full content for ID:", id);
             const songData = await GetSong(id);
-
-            // Extract the first track's content and load it into the editor.
-            // (Future: iterate tracks to select which one to edit.)
-            if (songData.tracks && songData.tracks.length > 0) {
-                trackSource.set(songData.tracks[0].data_content);
-            } else {
-                // Fallback when song exists but has no tracks (recovery)
-                trackSource.set('\\title "Load Error" \\n.');
-            }
+            song.set(songData);
+            activeTrackIndex.set(0);
         } catch (err) {
             console.error("Error fetching song:", err);
             alert("Failed to load the song.");
         }
-    });
+    }
+
+    // This reactive block now simply keeps `activeTrack` in sync.
+    // The actual data binding will happen inside the Editor component.
+    $: {
+        if ($song && $song.tracks) {
+            activeTrack = $song.tracks[$activeTrackIndex] ?? null;
+        } else {
+            activeTrack = null;
+        }
+    }
 
     function goBack() {
         currentView.set("dashboard");
@@ -42,16 +77,17 @@
 <div class="layout-wrapper">
     <div class="top-nav">
         <button class="back-btn" on:click={goBack}>← Back to Library</button>
-        <div class="spacer"></div>
+        <div class="spacer" />
     </div>
 
+    <TrackTabs />
     <div class="editor-workspace">
-        <Editor>
-            <div slot="toolbar">
-                <Toolbar />
-            </div>
-        </Editor>
-        <ScoreViewer />
+        {#if activeTrack}
+            <Editor bind:track={activeTrack} />
+            <ScoreViewer track={activeTrack} />
+        {:else}
+            <div class="placeholder">Select a track to start editing.</div>
+        {/if}
     </div>
 </div>
 
@@ -63,7 +99,6 @@
         width: 100%;
     }
 
-    /* Small top bar for navigation */
     .top-nav {
         height: 30px;
         background-color: #181818;
@@ -86,12 +121,21 @@
         text-decoration: underline;
     }
 
-    /* Workspace area fills the remaining space */
     .editor-workspace {
         flex: 1;
         display: flex;
         overflow: hidden;
         width: 100%;
         height: 100%;
+    }
+
+    .placeholder {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+        height: 100%;
+        font-size: 1.2rem;
+        color: #666;
     }
 </style>

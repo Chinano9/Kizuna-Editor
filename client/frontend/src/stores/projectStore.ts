@@ -16,7 +16,8 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { writable } from 'svelte/store';
+import { writable } from "svelte/store";
+import type { main } from "../../../wailsjs/go/models";
 
 /**
  * projectStore.ts
@@ -30,13 +31,8 @@ export const songId = writable<number>(0);
 // Metadata: Project Title
 export const songTitle = writable<string>("My New Idea");
 
-// The core content: AlphaTex markup (Lyrics + Chords + Tabs)
-export const trackSource = writable<string>(`
-\\title "Draft"
-\\tempo 120
-.
-:4 0.6 3.6 5.6
-`.trim());
-
 // Preference: Enable/Disable automatic bar line injection in the preview
 export const autoBar = writable<boolean>(true);
+
+// Holds the full song object, including all its tracks.
+export const song = writable<main.Song | null>(null);

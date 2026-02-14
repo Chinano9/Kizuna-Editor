@@ -1,0 +1,77 @@
+/* styles/main.css */
+
+/*
+  Font declarations for the entire application.
+  - Paths starting with '/' are relative to the 'public' directory.
+  - Paths starting with '../' are relative to this file's location.
+*/
+
+/* Bravura: Essential for AlphaTab music notation rendering */
+@font-face {
+    font-family: "alphaTab";
+    src: url("/font/Bravura.woff2") format("woff2");
+    font-weight: normal;
+    font-style: normal;
+}
+
+/* Nunito: Main UI font */
+@font-face {
+    font-family: "Nunito";
+    font-style: normal;
+    font-weight: 400;
+    src:
+        local(""),
+        url("../assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+}
+
+/* VT323: Used for editor theme */
+@font-face {
+    font-family: "VT323";
+    font-style: normal;
+    font-weight: 400;
+    src:
+        local(""),
+        url("/font/vt323.ttf") format("truetype");
+}
+
+/* Special Elite: Used for preview theme */
+@font-face {
+    font-family: "Special Elite";
+    font-style: normal;
+    font-weight: 400;
+    src:
+        local(""),
+        url("/font/specialelite.ttf") format("truetype");
+}
+
+:root {
+    /* --- THEME: EDITOR (Mooer GE100) --- */
+    --editor-bg: #2d1b0c;
+    --editor-text: #ff8c00;
+    --editor-font: "VT323", monospace;
+    --editor-border: #1a1008;
+
+    /* --- THEME: PREVIEW (Setlist) --- */
+    --preview-bg: #fffbeb;
+    --preview-text: #212121;
+    --preview-font: "Special Elite", cursive;
+    --preview-tape-color: #5a5a5a;
+
+    /* --- GENERAL --- */
+    --stage-floor-bg: #1a1a1a;
+}
+
+body,
+html {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    background-color: var(--stage-floor-bg);
+    font-family: sans-serif; /* Just a fallback */
+}
+
+*,
+*:before,
+*:after {
+    box-sizing: inherit;
+}

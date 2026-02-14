@@ -1,5 +1,23 @@
 export namespace models {
 	
+	export class Instrument {
+	    id: number;
+	    name: string;
+	    type: string;
+	    default_clef: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Instrument(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.type = source["type"];
+	        this.default_clef = source["default_clef"];
+	    }
+	}
 	export class Track {
 	    id: number;
 	    song_id: number;

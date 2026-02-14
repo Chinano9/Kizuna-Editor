@@ -1,0 +1,46 @@
+.editor-container {
+    background-color: var(--editor-bg);
+    font-family: var(--editor-font);
+    color: var(--editor-text);
+    border: 2px solid var(--editor-border);
+    border-radius: 8px;
+    padding: 20px;
+    height: 100%;
+
+    /* Kinda like a neon glow screen */
+    box-shadow:
+        inset 0 0 15px rgba(0, 0, 0, 0.7),
+        0 0 10px rgba(0, 0, 0, 0.5);
+
+    display: flex;
+    flex-direction: column;
+}
+
+.editor-textarea {
+    flex-grow: 1;
+    width: 100%;
+    background: none;
+    border: none;
+    outline: none;
+    resize: none;
+
+    color: var(--editor-text);
+    font-family: var(--editor-font);
+    font-size: 1.8rem;
+    line-height: 1.4;
+
+    /* Neon glow effect */
+    text-shadow: 0 0 5px var(--editor-text);
+}
+
+.editor-textarea::-webkit-scrollbar {
+    width: 10px;
+}
+.editor-textarea::-webkit-scrollbar-track {
+    background: var(--editor-border);
+}
+.editor-textarea::-webkit-scrollbar-thumb {
+    background-color: var(--editor-text);
+    border-radius: 2px;
+    border: 2px solid var(--editor-border);
+}

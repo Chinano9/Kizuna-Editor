@@ -1,67 +1,123 @@
 <script lang="ts">
-    /*
-        Kizuna Editor - A local-first songwriting environment.
-        Copyright (C) 2025 Fernando Ponce Solis (@Chinano9)
-
-        This program is free software: you can redistribute it and/or modify
-        it under the terms of the GNU Affero General Public License as published by
-        the Free Software Foundation, either version 3 of the License, or
-        (at your option) any later version.
-
-        This program is distributed in the hope that it will be useful,
-        but WITHOUT ANY WARRANTY; without even the implied warranty of
-        MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-        GNU Affero General Public License for more details.
-
-        You should have received a copy of the GNU Affero General Public License
-        along with this program.  If not, see <https://www.gnu.org/licenses/>.
-    */
-    import { onMount } from "svelte";
-    // @ts-ignore: Suppress type errors if @coderline/alphatab types are missing or conflicting
+    import { onMount, onDestroy, tick } from "svelte";
+    // @ts-ignore
     import { AlphaTabApi } from "@coderline/alphatab";
+
     import { injectBars } from "../lib/musicUtils";
-    import { trackSource, autoBar } from "../stores/projectStore";
+    import { autoBar } from "../stores/projectStore";
+    import { instrumentStore } from "@/stores/instrumentStore";
+    import type { main } from "../../../wailsjs/go/models";
+
+    import LyricsViewer from "./LyricsViewer.svelte";
+
+    export let track: main.Track | null = null;
 
     let scoreContainer: HTMLElement;
     let api: any;
+    let instrumentName = "";
+    let currentStaveProfile = "";
 
-    onMount(() => {
-        // Initialize AlphaTab engine targeting the container
+    // Reactive block to determine the instrument name whenever the track changes
+    $: {
+        if (track) {
+            instrumentName = instrumentStore.getNameById(track.instrument_id);
+        } else {
+            instrumentName = "";
+        }
+    }
+
+    function initializeApi() {
+        // Guard against multiple initializations or initializing without a container
+        if (api || !scoreContainer) return;
+
         api = new AlphaTabApi(scoreContainer, {
             core: {
                 tex: true,
-                useWorkers: false, // Keep false for Electron/Wails compatibility usually
+                useWorkers: false,
                 engine: "svg",
             },
             display: {
-                staveProfile: "Default",
+                staveProfile: "Default", // Start with a default
                 layoutMode: "page",
                 padding: [20, 20, 20, 20],
             },
             player: { enablePlayer: false },
         });
+    }
 
-        // Initial render
-        renderMusic($trackSource, $autoBar);
+    function destroyApi() {
+        if (api) {
+            api.destroy();
+            api = null;
+        }
+    }
+
+    // When the component is removed from the DOM, clean up the AlphaTab instance
+    onDestroy(() => {
+        destroyApi();
     });
 
-    // Reactive: Re-render when source or auto-formatting changes
-    $: if (api) {
-        renderMusic($trackSource, $autoBar);
+    // Main reactive block to handle rendering logic
+    $: {
+        if (track) {
+            if (instrumentName === "Vocals") {
+                destroyApi(); // Clean up if it was previously active
+            } else {
+                // This IIFE (Immediately Invoked Function Expression) allows us to use async/await
+                // to solve the race condition.
+                (async () => {
+                    // Wait for Svelte to update the DOM and render the #if block
+                    await tick();
+
+                    // Now that the DOM is updated, scoreContainer is guaranteed to exist.
+                    initializeApi();
+
+                    let newStaveProfile = "Default"; // For Guitar, Bass, etc.
+                    if (instrumentName === "Piano") {
+                        newStaveProfile = "Score";
+                    }
+
+                    // Only update settings if they have changed
+                    if (api && newStaveProfile !== currentStaveProfile) {
+                        api.settings.display.staveProfile = newStaveProfile;
+                        currentStaveProfile = newStaveProfile;
+                    }
+
+                    // Finally, render the music content
+                    renderMusic(track.data_content, $autoBar);
+                })();
+            }
+        } else {
+            // If there's no track, ensure we clean up and show nothing.
+            destroyApi();
+        }
     }
 
     function renderMusic(source: string, auto: boolean) {
         if (!api) return;
 
-        // Inject automatic bar lines if enabled, otherwise render raw source
+        if (typeof source !== "string" || source.trim() === "") {
+            api.tex("");
+            return;
+        }
+
         const textToRender = auto ? injectBars(source) : source;
         api.tex(textToRender);
     }
+    import "../styles/preview-theme.css";
 </script>
 
 <div class="visual-panel">
-    <div class="panel-header">Kizuna Preview</div>
-    <div class="score-wrapper" bind:this={scoreContainer}></div>
+    <div class="panel-header">
+        Kizuna Preview ({instrumentName || "No Track"})
+    </div>
+
+    {#if instrumentName === "Vocals"}
+        <LyricsViewer source={track?.data_content} />
+    {:else}
+        <!-- This container is for AlphaTab -->
+        <div class="preview-container" bind:this={scoreContainer} />
+    {/if}
 </div>
 
 <style>
@@ -85,13 +141,13 @@
         flex-shrink: 0;
     }
 
-    .score-wrapper {
+    .preview-container {
         flex: 1;
         overflow-y: auto;
-        padding: 20px;
         font-family: "alphaTab";
         width: 100%;
         box-sizing: border-box;
         display: block;
+        background-color: #fff; /* White background for score */
     }
 </style>
