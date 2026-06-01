@@ -1,27 +1,45 @@
 <script lang="ts">
     /*
+
       Kizuna Editor - A local-first songwriting environment.
+
       Copyright (C) 2025 Fernando Ponce Solis (@Chinano9)
 
+
+
       This program is free software: you can redistribute it and/or modify
+
       it under the terms of the GNU Affero General Public License as published by
+
       the Free Software Foundation, either version 3 of the License, or
+
       (at your option) any later version.
 
+
+
       This program is distributed in the hope that it will be useful,
+
       but WITHOUT ANY WARRANTY; without even the implied warranty of
+
       MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+
       GNU Affero General Public License for more details.
 
+
+
       You should have received a copy of the GNU Affero General Public License
+
       along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
   */
+
     import "../styles/editor-theme.css";
+
     import type { main } from "../../../wailsjs/go/models";
+
     import Toolbar from "./Toolbar.svelte";
 
-    // This component now receives the entire track object.
-    // The 'export let' makes it a bindable property.
+    // This component now recibe el objeto completo de track.
     export let track: main.Track;
 </script>
 
@@ -52,29 +70,39 @@
         min-width: 300px;
         display: flex;
         flex-direction: column;
+        background-color: var(--app-bg-alt);
+        border-left: 1px solid var(--lcd-border);
     }
 
     .toolbar-subdivision {
-        border-bottom: 1px solid #333;
+        border-bottom: 1px solid var(--lcd-border);
         padding: 5px;
-        background-color: #181818;
+        background-color: var(--lcd-header-bg);
     }
 
     .editor-textarea {
-        flex-grow: 1; /* Make textarea fill the available space */
-        background-color: #1e1e1e;
-        color: #d4d4d4;
+        flex-grow: 1;
+        background-color: var(--lcd-editor-bg);
+        color: var(--lcd-text);
         border: none;
-        padding: 15px;
-        font-family: "Fira Code", "Courier New", monospace;
-        font-size: 1rem;
-        line-height: 1.6;
+        padding: 16px 18px;
+        font-family: var(--lcd-font-main);
+        font-size: 1.2rem;
+        line-height: 1.7;
         resize: none;
         outline: none;
+        text-shadow: var(--lcd-glow-soft);
+        /* Scanlines suaves tipo pantalla LCD */
+        background-image: linear-gradient(
+            rgba(255, 255, 255, 0.03) 1px,
+            transparent 1px
+        );
+        background-size: 100% 3px;
     }
 
     .editor-textarea:disabled {
-        background-color: #2a2a2a;
+        background-color: #050b0b;
+        color: var(--lcd-text-muted);
         cursor: not-allowed;
     }
 </style>

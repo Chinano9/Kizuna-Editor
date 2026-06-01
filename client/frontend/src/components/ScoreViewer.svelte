@@ -1,4 +1,21 @@
 <script lang="ts">
+    /*
+         Kizuna Editor - A local-first songwriting environment.
+         Copyright (C) 2025 Fernando Ponce Solis (@Chinano9)
+
+         This program is free software: you can redistribute it and/or modify
+         it under the terms of the GNU Affero General Public License as published by
+         the Free Software Foundation, either version 3 of the License, or
+         (at your option) any later version.
+
+         This program is distributed in the hope that it will be useful,
+         but WITHOUT ANY WARRANTY; without even the implied warranty of
+         MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+         GNU Affero General Public License for more details.
+
+         You should have received a copy of the GNU Affero General Public License
+         along with this program.  If not, see <https://www.gnu.org/licenses/>.
+       */
     import { onMount, onDestroy, tick } from "svelte";
     // @ts-ignore
     import { AlphaTabApi } from "@coderline/alphatab";
@@ -16,8 +33,34 @@
     let api: any;
     let instrumentName = "";
     let currentStaveProfile = "";
+    let currentScale = 1;
 
-    // Reactive block to determine the instrument name whenever the track changes
+    function rescaleScoreToFitWidth() {
+        if (!scoreContainer) return;
+        const svg = scoreContainer.querySelector("svg") as SVGSVGElement | null;
+        if (!svg) return;
+
+        const bbox = svg.getBBox();
+        const svgWidth = bbox.width;
+        const svgHeight = bbox.height;
+        if (!svgWidth || !svgHeight) return;
+
+        const container = scoreContainer.parentElement as HTMLElement | null;
+        if (!container) return;
+
+        const availableWidth = container.clientWidth;
+        if (!availableWidth) return;
+
+        const scale = Math.min(1, availableWidth / svgWidth);
+        currentScale = scale;
+
+        scoreContainer.style.transformOrigin = "top left";
+        scoreContainer.style.transform = `scale(${scale})`;
+        scoreContainer.style.width = `${svgWidth}px`;
+        scoreContainer.style.height = `${svgHeight}px`;
+    }
+
+    // Reactive block to determine the instrument name whenever el track cambia
     $: {
         if (track) {
             instrumentName = instrumentStore.getNameById(track.instrument_id);
@@ -26,8 +69,8 @@
         }
     }
 
-    function initializeApi() {
-        // Guard against multiple initializations or initializing without a container
+    function initializeApi(staveProfile: "Default" | "Score" = "Default") {
+        // Guard against múltiples inicializaciones o inicializar sin contenedor
         if (api || !scoreContainer) return;
 
         api = new AlphaTabApi(scoreContainer, {
@@ -35,14 +78,42 @@
                 tex: true,
                 useWorkers: false,
                 engine: "svg",
+                fontDirectory: "/font/", // Path to the font directory
             },
             display: {
-                staveProfile: "Default", // Start with a default
+                staveProfile, // Usamos el perfil recibido
                 layoutMode: "page",
                 padding: [20, 20, 20, 20],
             },
             player: { enablePlayer: false },
         });
+    }
+
+    function looksLikeAlphaTex(source: string): boolean {
+        const trimmed = source.trim();
+        if (!trimmed) return false;
+
+        // Heurística básica: directivas AlphaTex típicas al inicio
+        if (
+            trimmed.startsWith("score ") ||
+            trimmed.startsWith("part ") ||
+            trimmed.startsWith("tempo ")
+        ) {
+            return true;
+        }
+
+        // Otra heurística: líneas que empiezan con ':' seguidas de una duración válida
+        const alphaLines = trimmed
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l.startsWith(":"));
+
+        const durationRegex = /^: ?(-4|-2|1|2|4|8|16|32|64|128|256)\b/;
+        if (alphaLines.some((l) => durationRegex.test(l))) {
+            return true;
+        }
+
+        return false;
     }
 
     function destroyApi() {
@@ -57,53 +128,68 @@
         destroyApi();
     });
 
-    // Main reactive block to handle rendering logic
-    $: {
-        if (track) {
-            if (instrumentName === "Vocals") {
-                destroyApi(); // Clean up if it was previously active
-            } else {
-                // This IIFE (Immediately Invoked Function Expression) allows us to use async/await
-                // to solve the race condition.
-                (async () => {
-                    // Wait for Svelte to update the DOM and render the #if block
-                    await tick();
+    // Main reactive block to handle AlphaTab lifecycle and rendering
+    $: updateAlphaTab(track, instrumentName, $autoBar);
 
-                    // Now that the DOM is updated, scoreContainer is guaranteed to exist.
-                    initializeApi();
-
-                    let newStaveProfile = "Default"; // For Guitar, Bass, etc.
-                    if (instrumentName === "Piano") {
-                        newStaveProfile = "Score";
-                    }
-
-                    // Only update settings if they have changed
-                    if (api && newStaveProfile !== currentStaveProfile) {
-                        api.settings.display.staveProfile = newStaveProfile;
-                        currentStaveProfile = newStaveProfile;
-                    }
-
-                    // Finally, render the music content
-                    renderMusic(track.data_content, $autoBar);
-                })();
-            }
-        } else {
-            // If there's no track, ensure we clean up and show nothing.
+    async function updateAlphaTab(
+        currentTrack: main.Track | null,
+        currentInstrumentName: string,
+        auto: boolean,
+    ) {
+        if (!currentTrack) {
             destroyApi();
+            instrumentName = "";
+            return;
         }
+
+        if (currentInstrumentName === "Vocals") {
+            // Para voces usamos LyricsViewer, no AlphaTab
+            destroyApi();
+            return;
+        }
+
+        const content = currentTrack.data_content ?? "";
+        const rawText = auto ? injectBars(content) : content;
+
+        // Si aún no parece AlphaTex, no inicializamos AlphaTab ni intentamos renderizar
+        if (!looksLikeAlphaTex(rawText)) {
+            destroyApi();
+            return;
+        }
+
+        // En este punto ya tenemos algo que parece AlphaTex
+        await tick();
+
+        let newStaveProfile: "Default" | "Score" = "Default"; // For Guitar, Bass, etc.
+        if (currentInstrumentName === "Piano") {
+            newStaveProfile = "Score";
+        }
+
+        initializeApi(newStaveProfile);
+        currentStaveProfile = newStaveProfile;
+
+        // Finalmente, renderizamos el contenido AlphaTex
+        renderMusic(rawText);
     }
 
-    function renderMusic(source: string, auto: boolean) {
+    function renderMusic(textToRender: string) {
         if (!api) return;
 
-        if (typeof source !== "string" || source.trim() === "") {
+        const trimmed = textToRender.trim();
+        if (!trimmed) {
             api.tex("");
             return;
         }
 
-        const textToRender = auto ? injectBars(source) : source;
-        api.tex(textToRender);
+        // En este punto asumimos que looksLikeAlphaTex(trimmed) ya fue true
+        api.tex(trimmed);
+
+        // Reescalar después de que AlphaTab haya renderizado el SVG
+        tick().then(() => {
+            rescaleScoreToFitWidth();
+        });
     }
+
     import "../styles/preview-theme.css";
 </script>
 
@@ -116,7 +202,9 @@
         <LyricsViewer source={track?.data_content} />
     {:else}
         <!-- This container is for AlphaTab -->
-        <div class="preview-container" bind:this={scoreContainer} />
+        <div class="preview-container">
+            <div class="score-scale-wrapper" bind:this={scoreContainer} />
+        </div>
     {/if}
 </div>
 
@@ -130,8 +218,8 @@
         color: black;
         min-width: 300px;
         overflow: hidden;
+        box-sizing: border-box;
     }
-
     .panel-header {
         background-color: #e0e0e0;
         color: #333;
@@ -144,10 +232,18 @@
     .preview-container {
         flex: 1;
         overflow-y: auto;
+        overflow-x: hidden;
         font-family: "alphaTab";
         width: 100%;
+        max-width: 100%;
         box-sizing: border-box;
         display: block;
         background-color: #fff; /* White background for score */
+        position: relative;
+    }
+
+    .score-scale-wrapper {
+        transform-origin: top left;
+        will-change: transform;
     }
 </style>

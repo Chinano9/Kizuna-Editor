@@ -1,0 +1,103 @@
+:root {
+    /* Fondo general tipo consola / pantalla LCD */
+
+    --app-bg: #050607;
+
+    --app-bg-alt: #0b1012;
+
+    /* Texto verde principal */
+
+    --lcd-text: #c8ff9f;
+
+    --lcd-text-soft: #a0e58d;
+
+    --lcd-text-muted: #5a7c5a;
+
+    /* Ámbar / naranja para acentos y botones */
+
+    --lcd-amber: #ffc966;
+
+    --lcd-amber-soft: #d9a85a;
+
+    /* Bordes y líneas de división */
+
+    --lcd-border: #243524;
+
+    --lcd-border-strong: #5cf29a;
+
+    /* Brillos / glow - unificados en ámbar */
+
+    --lcd-glow: 0 0 8px rgba(255, 201, 102, 0.8);
+    --lcd-glow-soft: 0 0 12px rgba(255, 201, 102, 0.4);
+
+    /* Alias de compatibilidad (mismo valor ámbar) */
+    --lcd-amber-glow: var(--lcd-glow);
+    --lcd-amber-glow-soft: var(--lcd-glow-soft);
+
+    /* Tipografía principal tipo terminal/LCD */
+
+    --lcd-font-main: "VT323", "Special Elite", monospace;
+
+    --lcd-font-ui: "VT323", monospace;
+
+    /* Botones (estilo LCD ámbar) */
+
+    --lcd-button-bg: #15110a;
+
+    --lcd-button-bg-soft: #1c160a;
+
+    --lcd-button-border: #c3933b;
+
+    --lcd-button-hover-bg: #242016;
+
+    --lcd-button-hover-border: #ffc966;
+
+    /* Headers / barras superiores */
+
+    --lcd-header-bg: #050b0b;
+
+    --lcd-header-border: #165039;
+
+    --lcd-header-shadow: 0 0 10px rgba(255, 201, 102, 0.45);
+
+    /* Áreas de edición / textarea */
+
+    --lcd-editor-bg: #020606;
+
+    --lcd-editor-border: #123024;
+
+    /* Scrollbars en modo LCD (opcional, para quien los use) */
+
+    --lcd-scrollbar-bg: #080d0e;
+
+    --lcd-scrollbar-thumb: #1c3024;
+
+    --lcd-scrollbar-thumb-hover: #294636;
+}
+
+/* Estilos base opcionales para toda la app si se importan globalmente */
+body {
+    background-color: var(--app-bg);
+    color: var(--lcd-text);
+    font-family: var(--lcd-font-ui);
+}
+
+/* Scrollbar estilo LCD (WebKit-based navegadores) */
+*::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+    background: var(--lcd-scrollbar-bg);
+}
+
+*::-webkit-scrollbar-thumb {
+    background-color: var(--lcd-scrollbar-thumb);
+    border-radius: 4px;
+    border: 2px solid var(--lcd-scrollbar-bg);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background-color: var(--lcd-scrollbar-thumb-hover);
+}

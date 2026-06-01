@@ -1,54 +1,63 @@
 <script lang="ts">
+    /*
+      Kizuna Editor - A local-first songwriting environment.
+      Copyright (C) 2025 Fernando Ponce Solis (@Chinano9)
+
+      This program is free software: you can redistribute it and/or modify
+      it under the terms of the GNU Affero General Public License as published by
+      the Free Software Foundation, either version 3 of the License, or
+      (at your option) any later version.
+
+      This program is distributed in the hope that it will be useful,
+      but WITHOUT ANY WARRANTY; without even the implied warranty of
+      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+      GNU Affero General Public License for more details.
+
+      You should have received a copy of the GNU Affero General Public License
+      along with this program.  If not, see <https://www.gnu.org/licenses/>.
+    */
+    import { marked } from "marked";
+
     export let source: string = "";
 
-    let lyrics = "";
+    let renderedHtml: string = "";
 
-    // Reactive statement to parse lyrics whenever the source changes
     $: {
         if (typeof source === "string") {
-            lyrics = parseLyrics(source);
+            renderedHtml = marked(source);
         } else {
-            lyrics = "Invalid track data.";
+            renderedHtml = "<p>Invalid track data.</p>";
         }
-    }
-
-    /**
-     * A simple parser to extract lyrics from an AlphaTex string.
-     * It finds lines that start with a colon followed by a space,
-     * which denotes a lyric line in this convention.
-     */
-    function parseLyrics(alphaTex: string): string {
-        if (!alphaTex) return "No lyrics found.";
-
-        const lines = alphaTex.split("\n");
-        const lyricLines = lines
-            .filter((line) => line.trim().startsWith(": "))
-            .map((line) => line.trim().substring(2)); // Remove the ': ' prefix
-
-        return lyricLines.join("\n") || "No lyrics found in this track.";
     }
 </script>
 
 <div class="lyrics-container">
-    <pre>{lyrics}</pre>
+    {@html renderedHtml}
 </div>
 
 <style>
     .lyrics-container {
         padding: 20px;
-        font-family: "Courier New", Courier, monospace;
+        font-family: sans-serif;
         font-size: 1rem;
         line-height: 1.5;
-        white-space: pre-wrap; /* Allows wrapping of long lines */
-        word-wrap: break-word;
         color: #333;
         background-color: #fff;
+        /* Limitar ancho al contenedor padre y evitar desbordes horizontales */
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
         height: 100%;
         overflow-y: auto;
+        overflow-x: hidden;
     }
-
-    pre {
-        margin: 0;
-        font-family: inherit; /* Inherit the font from the container */
+    
+    /* Evitar que contenido ancho (imágenes, tablas, bloques de código) genere scroll horizontal */
+    .lyrics-container img,
+    .lyrics-container table,
+    .lyrics-container pre,
+    .lyrics-container code {
+        max-width: 100%;
+        box-sizing: border-box;
     }
 </style>
