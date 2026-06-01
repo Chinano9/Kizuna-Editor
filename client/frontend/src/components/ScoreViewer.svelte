@@ -33,16 +33,19 @@
     let api: any;
     let instrumentName = "";
     let currentStaveProfile = "";
-    let currentScale = 1;
+    let currentScale = 0;
 
     function rescaleScoreToFitWidth() {
         if (!scoreContainer) return;
         const svg = scoreContainer.querySelector("svg") as SVGSVGElement | null;
         if (!svg) return;
 
-        const bbox = svg.getBBox();
-        const svgWidth = bbox.width;
-        const svgHeight = bbox.height;
+        // Use stable unscaled SVG attributes from AlphaTab as absolute constants
+        // to prevent feedback loops with getBBox() during continuous resizing.
+        const widthAttr = svg.getAttribute("width");
+        const heightAttr = svg.getAttribute("height");
+        const svgWidth = widthAttr ? parseFloat(widthAttr) : svg.getBBox().width;
+        const svgHeight = heightAttr ? parseFloat(heightAttr) : svg.getBBox().height;
         if (!svgWidth || !svgHeight) return;
 
         const container = scoreContainer.parentElement as HTMLElement | null;
@@ -51,7 +54,11 @@
         const availableWidth = container.clientWidth;
         if (!availableWidth) return;
 
-        const scale = Math.min(1, availableWidth / svgWidth);
+        // Subtract a 24px safe margin to prevent scrollbar toggling oscillation loops.
+        const scale = Math.min(1, (availableWidth - 24) / svgWidth);
+
+        // Prevent layout thrashing and loops on microscopic adjustments
+        if (Math.abs(scale - currentScale) < 0.005) return;
         currentScale = scale;
 
         scoreContainer.style.transformOrigin = "top left";
@@ -192,6 +199,8 @@
 
     import "../styles/preview-theme.css";
 </script>
+
+<svelte:window on:resize={rescaleScoreToFitWidth} />
 
 <div class="visual-panel">
     <div class="panel-header">

@@ -391,6 +391,7 @@ func (m *DBManager) SaveSong(song *models.Song) (*models.Song, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query existing track ids: %w", err)
 	}
+	defer rows.Close()
 	existingTrackIDs := make(map[int]bool)
 	for rows.Next() {
 		var id int
@@ -399,7 +400,6 @@ func (m *DBManager) SaveSong(song *models.Song) (*models.Song, error) {
 		}
 		existingTrackIDs[id] = true
 	}
-	rows.Close()
 
 	// Find which tracks to delete
 	incomingTrackIDs := make(map[int]bool)
@@ -483,9 +483,9 @@ func createFullSchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS tracks (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			song_id INTEGER NOT NULL,
-			instrument_id INTEGER,
-			name TEXT,
-			data_content TEXT,
+			instrument_id INTEGER NOT NULL,
+			name TEXT NOT NULL,
+			data_content TEXT NOT NULL,
 			display_mode TEXT DEFAULT 'BOTH',
 			is_muted BOOLEAN DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

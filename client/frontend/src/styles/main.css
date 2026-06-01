@@ -5,6 +5,7 @@
   - Paths starting with '/' are relative to the 'public' directory.
   - Paths starting with '../' are relative to this file's location.
 */
+@import "./lcd-theme.css";
 
 /* Bravura: Essential for AlphaTab music notation rendering */
 @font-face {

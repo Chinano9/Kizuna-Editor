@@ -60,11 +60,13 @@
         if (!$song) return;
 
         try {
-            const newTrackName = `Track ${$song.tracks.length + 1}`;
+            const trackCount = $song.tracks ? $song.tracks.length : 0;
+            const newTrackName = `Track ${trackCount + 1}`;
 
             const newTrack = await AddTrack($song.id, newTrackName);
 
-            $song.tracks = [...$song.tracks, newTrack];
+            const currentTracks = $song.tracks || [];
+            $song.tracks = [...currentTracks, newTrack];
 
             song.set($song);
 

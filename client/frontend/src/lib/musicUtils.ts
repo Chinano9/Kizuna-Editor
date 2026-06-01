@@ -239,6 +239,7 @@ export function injectBars(source: string): string {
             else if (token === '}') { state.endTuplet(); }
             else if (token === '(') { state.inChord = true; }
             else if (token === ')') { state.inChord = false; }
+            else if (token === '|') { state.resetAccumulator(); }
 
             // D. Note Processing
             else if (token.match(REGEX_NOTE)) {
