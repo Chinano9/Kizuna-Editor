@@ -254,6 +254,43 @@ func (m *DBManager) AddTrack(songID int, trackName string) (*models.Track, error
 	return &newTrack, nil
 }
 
+// AddAudioTrack creates a new track for a song with recorded audio file path.
+// It sets the instrument ID to 5 (Vocals/Voice) by default, and stores the audio file
+// path in the data_content field prefixed with "audio:".
+func (m *DBManager) AddAudioTrack(songID int, trackName string, filePath string) (*models.Track, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+
+	const vocalInstrumentID = 5 // InstrumentCatalog ID for Vocals/Voice
+	audioContent := "audio:" + filePath
+
+	query := `
+		INSERT INTO tracks (song_id, instrument_id, name, data_content, display_mode)
+		VALUES (?, ?, ?, ?, 'BOTH')`
+
+	res, err := m.db.Exec(query, songID, vocalInstrumentID, trackName, audioContent)
+	if err != nil {
+		return nil, fmt.Errorf("insert audio track: %w", err)
+	}
+
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("get last insert id for audio track: %w", err)
+	}
+
+	// Retrieve the newly created track to return it
+	var newTrack models.Track
+	err = m.db.QueryRow("SELECT id, song_id, instrument_id, name, data_content, display_mode, is_muted, created_at FROM tracks WHERE id = ?", newID).Scan(
+		&newTrack.ID, &newTrack.SongID, &newTrack.InstrumentID, &newTrack.Name, &newTrack.DataContent, &newTrack.DisplayMode, &newTrack.IsMuted, &newTrack.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("retrieve new audio track: %w", err)
+	}
+
+	return &newTrack, nil
+}
+
 // DeleteTrack removes a track by its ID.
 func (m *DBManager) DeleteTrack(trackID int) error {
 	if m == nil || m.db == nil {
