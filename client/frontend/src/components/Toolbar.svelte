@@ -1,5 +1,6 @@
 <script lang="ts">
     /*
+
         Kizuna Editor - A local-first songwriting environment.
         Copyright (C) 2025 Fernando Ponce Solis (@Chinano9)
 
@@ -16,132 +17,229 @@
         You should have received a copy of the GNU Affero General Public License
         along with this program.  If not, see <https://www.gnu.org/licenses/>.
     */
+
     import { get } from "svelte/store";
-    import { SaveQuickIdea } from "../../wailsjs/go/main/App";
-    import {
-        songId,
-        songTitle,
-        trackSource,
-        autoBar,
-    } from "../stores/projectStore";
+
+    import { SaveSong } from "../../wailsjs/go/main/App";
+
+    import { song, autoBar } from "../stores/projectStore";
 
     async function save() {
-        // Snapshot current state from stores without subscribing
-        const currentTitle = get(songTitle);
-        const currentSource = get(trackSource);
-        const currentId = get(songId);
+        const currentSong = get(song);
 
-        if (!currentSource) {
-            console.warn("Attempted to save without a track source.");
+        if (!currentSong) {
+            alert("No song data to save.");
+
             return;
         }
 
         try {
-            console.debug(`Saving project: "${currentTitle}"`);
+            console.log("Saving song object:", currentSong);
 
-            // Call backend to persist a quick idea and receive (possibly new) ID
-            const newId = await SaveQuickIdea(
-                currentId,
-                currentTitle,
-                currentSource,
-            );
+            const updatedSong = await SaveSong(currentSong);
 
-            // Persist returned ID to the store
-            songId.set(newId);
+            song.set(updatedSong);
 
             // TODO: Replace browser alert with app toast/notification for better UX
-            alert(`Saved successfully (ID: ${newId})`);
+
+            alert(`Saved successfully (ID: ${updatedSong.id})`);
         } catch (err) {
             console.error("Failed to save project:", err);
+
             alert("Failed to save project.");
         }
     }
 </script>
 
 <div class="panel-header control-bar">
-    <input
-        type="text"
-        class="title-input"
-        bind:value={$songTitle}
-        placeholder="Song Title..."
-    />
+    {#if $song}
+        <input
+            type="text"
+            class="title-input"
+            bind:value={$song.title}
+            placeholder="Song Title..."
+        />
+    {/if}
 
     <div class="actions">
         <label class="toggle-switch">
             <input type="checkbox" bind:checked={$autoBar} />
+
             <span>Auto |</span>
         </label>
+
         <button class="save-btn" on:click={save}>💾 Save</button>
     </div>
 </div>
 
 <style>
     .panel-header {
-        background-color: #252526;
-        color: #ccc;
+        background-color: var(--lcd-header-bg);
+        color: var(--lcd-text);
         padding: 10px 15px;
-        border-bottom: 1px solid #333;
 
-        /* Layout stability */
-        flex-shrink: 0; /* Prevents the editor area from compressing the header */
+        border-bottom: 1px solid var(--lcd-header-border);
+        font-family: var(--lcd-font-ui);
+        flex-shrink: 0;
         min-height: 40px;
         display: flex;
-        flex-direction: column;
-        justify-content: center;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        box-shadow: var(--lcd-header-shadow);
     }
 
     .control-bar {
         display: flex;
         justify-content: space-between;
+
         align-items: center;
+
         gap: 10px;
+
+        width: 100%;
     }
 
     .title-input {
         background: transparent;
+
         border: none;
-        color: white;
+
+        color: var(--lcd-text);
+        text-shadow: var(--lcd-glow-soft);
         font-size: 1rem;
         font-weight: bold;
+
         width: 100%;
+
         outline: none;
-        border-bottom: 1px solid transparent;
+
+        border-bottom: 1px solid var(--lcd-border);
     }
 
     .title-input:focus {
-        border-bottom-color: #4ec9b0;
+        border-bottom-color: var(--lcd-border-strong);
     }
 
     .actions {
         display: flex;
         align-items: center;
+
         gap: 10px;
     }
 
     .save-btn {
-        background-color: #0e639c;
-        color: white;
-        border: none;
-        padding: 6px 12px;
+        position: relative;
+
+        background: radial-gradient(
+            circle at 50% 0,
+            rgba(255, 201, 102, 0.45) 0,
+            var(--lcd-button-bg) 60%
+        );
+        color: var(--lcd-amber);
+
+        text-shadow:
+            0 0 3px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow-soft);
+        border: 1px solid var(--lcd-button-border);
+
+        padding: 4px 12px;
         border-radius: 4px;
         cursor: pointer;
+
         white-space: nowrap;
+
+        box-shadow:
+            0 0 0 1px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow-soft);
+        font-family: var(--lcd-font-ui);
+
+        font-size: 0.9rem;
+        letter-spacing: 0.08em;
+
+        text-transform: uppercase;
+
+        transition:
+            background-color 0.15s ease,
+            border-color 0.15s ease,
+            transform 0.1s ease,
+            box-shadow 0.15s ease,
+            filter 0.15s ease;
+    }
+
+    .save-btn::before {
+        content: "";
+
+        position: absolute;
+
+        inset: 2px 2px auto 2px;
+        height: 40%;
+        background: linear-gradient(
+            to bottom,
+
+            rgba(255, 220, 170, 0.2),
+            transparent
+        );
+
+        border-radius: 3px 3px 1px 1px;
+        pointer-events: none;
+
+        opacity: 0.85;
     }
 
     .save-btn:hover {
-        background-color: #1177bb;
+        background: radial-gradient(
+            circle at 50% 0,
+            rgba(255, 201, 102, 0.6) 0,
+            var(--lcd-button-bg-soft) 65%
+        );
+        border-color: var(--lcd-button-hover-border);
+
+        box-shadow:
+            0 0 0 1px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow);
+        transform: translateY(-1px);
+
+        filter: brightness(1.05);
+    }
+
+    .save-btn:active {
+        transform: translateY(1px);
+
+        filter: brightness(0.9);
+
+        box-shadow:
+            0 0 0 1px rgba(0, 0, 0, 0.9),
+            0 0 6px rgba(255, 201, 102, 0.45);
     }
 
     .toggle-switch {
         display: flex;
+
         align-items: center;
+
         cursor: pointer;
+
         font-size: 0.8rem;
-        color: #4ec9b0;
+
+        color: var(--lcd-text-soft);
+
+        text-shadow: var(--lcd-glow-soft);
+
         white-space: nowrap;
+
+        gap: 4px;
     }
 
     .toggle-switch input {
         margin-right: 5px;
+
+        accent-color: var(--lcd-amber);
+    }
+
+    .toggle-switch span {
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--lcd-amber-soft);
     }
 </style>

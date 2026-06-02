@@ -1,0 +1,51 @@
+.preview-container {
+    background-color: var(--preview-bg);
+    font-family: var(--preview-font);
+    color: var(--preview-text);
+    padding: 40px;
+    height: 100%;
+    border: 1px solid #ddd;
+    box-shadow: 5px 5px 15px rgba(0, 0, 0, 0.3);
+    position: relative;
+
+    /* Kinda like paper texture with wrinkles */
+    background-image:
+        linear-gradient(
+            90deg,
+            rgba(0, 0, 0, 0.02) 0%,
+            transparent 10%,
+            transparent 90%,
+            rgba(0, 0, 0, 0.02) 100%
+        ),
+        linear-gradient(
+            0deg,
+            rgba(0, 0, 0, 0.01) 0%,
+            transparent 20%,
+            transparent 80%,
+            rgba(0, 0, 0, 0.01) 100%
+        ),
+        radial-gradient(
+            circle at 10% 20%,
+            rgba(255, 255, 255, 0.15) 0%,
+            rgba(255, 255, 255, 0) 25%
+        ),
+        radial-gradient(
+            circle at 85% 70%,
+            rgba(0, 0, 0, 0.05) 0%,
+            rgba(0, 0, 0, 0) 30%
+        );
+}
+
+.preview-content {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    resize: none;
+
+    font-family: var(--preview-font);
+    font-size: 1.5rem;
+    line-height: 1.6;
+    color: var(--preview-text);
+}

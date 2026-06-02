@@ -19,6 +19,7 @@
     "vite": "^3.0.7"
   },
   "dependencies": {
-    "@coderline/alphatab": "^1.7.1"
+    "@coderline/alphatab": "^1.7.1",
+    "marked": "^17.0.3"
   }
 }

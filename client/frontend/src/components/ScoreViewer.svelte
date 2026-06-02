@@ -1,67 +1,220 @@
 <script lang="ts">
     /*
-        Kizuna Editor - A local-first songwriting environment.
-        Copyright (C) 2025 Fernando Ponce Solis (@Chinano9)
+         Kizuna Editor - A local-first songwriting environment.
+         Copyright (C) 2025 Fernando Ponce Solis (@Chinano9)
 
-        This program is free software: you can redistribute it and/or modify
-        it under the terms of the GNU Affero General Public License as published by
-        the Free Software Foundation, either version 3 of the License, or
-        (at your option) any later version.
+         This program is free software: you can redistribute it and/or modify
+         it under the terms of the GNU Affero General Public License as published by
+         the Free Software Foundation, either version 3 of the License, or
+         (at your option) any later version.
 
-        This program is distributed in the hope that it will be useful,
-        but WITHOUT ANY WARRANTY; without even the implied warranty of
-        MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-        GNU Affero General Public License for more details.
+         This program is distributed in the hope that it will be useful,
+         but WITHOUT ANY WARRANTY; without even the implied warranty of
+         MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+         GNU Affero General Public License for more details.
 
-        You should have received a copy of the GNU Affero General Public License
-        along with this program.  If not, see <https://www.gnu.org/licenses/>.
-    */
-    import { onMount } from "svelte";
-    // @ts-ignore: Suppress type errors if @coderline/alphatab types are missing or conflicting
+         You should have received a copy of the GNU Affero General Public License
+         along with this program.  If not, see <https://www.gnu.org/licenses/>.
+       */
+    import { onMount, onDestroy, tick } from "svelte";
+    // @ts-ignore
     import { AlphaTabApi } from "@coderline/alphatab";
+
     import { injectBars } from "../lib/musicUtils";
-    import { trackSource, autoBar } from "../stores/projectStore";
+    import { autoBar } from "../stores/projectStore";
+    import { instrumentStore } from "@/stores/instrumentStore";
+    import type { main } from "../../../wailsjs/go/models";
+
+    import LyricsViewer from "./LyricsViewer.svelte";
+
+    export let track: main.Track | null = null;
 
     let scoreContainer: HTMLElement;
     let api: any;
+    let instrumentName = "";
+    let currentStaveProfile = "";
+    let currentScale = 0;
 
-    onMount(() => {
-        // Initialize AlphaTab engine targeting the container
+    function rescaleScoreToFitWidth() {
+        if (!scoreContainer) return;
+        const svg = scoreContainer.querySelector("svg") as SVGSVGElement | null;
+        if (!svg) return;
+
+        // Use stable unscaled SVG attributes from AlphaTab as absolute constants
+        // to prevent feedback loops with getBBox() during continuous resizing.
+        const widthAttr = svg.getAttribute("width");
+        const heightAttr = svg.getAttribute("height");
+        const svgWidth = widthAttr ? parseFloat(widthAttr) : svg.getBBox().width;
+        const svgHeight = heightAttr ? parseFloat(heightAttr) : svg.getBBox().height;
+        if (!svgWidth || !svgHeight) return;
+
+        const container = scoreContainer.parentElement as HTMLElement | null;
+        if (!container) return;
+
+        const availableWidth = container.clientWidth;
+        if (!availableWidth) return;
+
+        // Subtract a 24px safe margin to prevent scrollbar toggling oscillation loops.
+        const scale = Math.min(1, (availableWidth - 24) / svgWidth);
+
+        // Prevent layout thrashing and loops on microscopic adjustments
+        if (Math.abs(scale - currentScale) < 0.005) return;
+        currentScale = scale;
+
+        scoreContainer.style.transformOrigin = "top left";
+        scoreContainer.style.transform = `scale(${scale})`;
+        scoreContainer.style.width = `${svgWidth}px`;
+        scoreContainer.style.height = `${svgHeight}px`;
+    }
+
+    // Reactive block to determine the instrument name whenever el track cambia
+    $: {
+        if (track) {
+            instrumentName = instrumentStore.getNameById(track.instrument_id);
+        } else {
+            instrumentName = "";
+        }
+    }
+
+    function initializeApi(staveProfile: "Default" | "Score" = "Default") {
+        // Guard against múltiples inicializaciones o inicializar sin contenedor
+        if (api || !scoreContainer) return;
+
         api = new AlphaTabApi(scoreContainer, {
             core: {
                 tex: true,
-                useWorkers: false, // Keep false for Electron/Wails compatibility usually
+                useWorkers: false,
                 engine: "svg",
+                fontDirectory: "/font/", // Path to the font directory
             },
             display: {
-                staveProfile: "Default",
+                staveProfile, // Usamos el perfil recibido
                 layoutMode: "page",
                 padding: [20, 20, 20, 20],
             },
             player: { enablePlayer: false },
         });
+    }
 
-        // Initial render
-        renderMusic($trackSource, $autoBar);
+    function looksLikeAlphaTex(source: string): boolean {
+        const trimmed = source.trim();
+        if (!trimmed) return false;
+
+        // Heurística básica: directivas AlphaTex típicas al inicio
+        if (
+            trimmed.startsWith("score ") ||
+            trimmed.startsWith("part ") ||
+            trimmed.startsWith("tempo ")
+        ) {
+            return true;
+        }
+
+        // Otra heurística: líneas que empiezan con ':' seguidas de una duración válida
+        const alphaLines = trimmed
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l.startsWith(":"));
+
+        const durationRegex = /^: ?(-4|-2|1|2|4|8|16|32|64|128|256)\b/;
+        if (alphaLines.some((l) => durationRegex.test(l))) {
+            return true;
+        }
+
+        return false;
+    }
+
+    function destroyApi() {
+        if (api) {
+            api.destroy();
+            api = null;
+        }
+    }
+
+    // When the component is removed from the DOM, clean up the AlphaTab instance
+    onDestroy(() => {
+        destroyApi();
     });
 
-    // Reactive: Re-render when source or auto-formatting changes
-    $: if (api) {
-        renderMusic($trackSource, $autoBar);
+    // Main reactive block to handle AlphaTab lifecycle and rendering
+    $: updateAlphaTab(track, instrumentName, $autoBar);
+
+    async function updateAlphaTab(
+        currentTrack: main.Track | null,
+        currentInstrumentName: string,
+        auto: boolean,
+    ) {
+        if (!currentTrack) {
+            destroyApi();
+            instrumentName = "";
+            return;
+        }
+
+        if (currentInstrumentName === "Vocals") {
+            // Para voces usamos LyricsViewer, no AlphaTab
+            destroyApi();
+            return;
+        }
+
+        const content = currentTrack.data_content ?? "";
+        const rawText = auto ? injectBars(content) : content;
+
+        // Si aún no parece AlphaTex, no inicializamos AlphaTab ni intentamos renderizar
+        if (!looksLikeAlphaTex(rawText)) {
+            destroyApi();
+            return;
+        }
+
+        // En este punto ya tenemos algo que parece AlphaTex
+        await tick();
+
+        let newStaveProfile: "Default" | "Score" = "Default"; // For Guitar, Bass, etc.
+        if (currentInstrumentName === "Piano") {
+            newStaveProfile = "Score";
+        }
+
+        initializeApi(newStaveProfile);
+        currentStaveProfile = newStaveProfile;
+
+        // Finalmente, renderizamos el contenido AlphaTex
+        renderMusic(rawText);
     }
 
-    function renderMusic(source: string, auto: boolean) {
+    function renderMusic(textToRender: string) {
         if (!api) return;
 
-        // Inject automatic bar lines if enabled, otherwise render raw source
-        const textToRender = auto ? injectBars(source) : source;
-        api.tex(textToRender);
+        const trimmed = textToRender.trim();
+        if (!trimmed) {
+            api.tex("");
+            return;
+        }
+
+        // En este punto asumimos que looksLikeAlphaTex(trimmed) ya fue true
+        api.tex(trimmed);
+
+        // Reescalar después de que AlphaTab haya renderizado el SVG
+        tick().then(() => {
+            rescaleScoreToFitWidth();
+        });
     }
+
+    import "../styles/preview-theme.css";
 </script>
 
+<svelte:window on:resize={rescaleScoreToFitWidth} />
+
 <div class="visual-panel">
-    <div class="panel-header">Kizuna Preview</div>
-    <div class="score-wrapper" bind:this={scoreContainer}></div>
+    <div class="panel-header">
+        Kizuna Preview ({instrumentName || "No Track"})
+    </div>
+
+    {#if instrumentName === "Vocals"}
+        <LyricsViewer source={track?.data_content} />
+    {:else}
+        <!-- This container is for AlphaTab -->
+        <div class="preview-container">
+            <div class="score-scale-wrapper" bind:this={scoreContainer} />
+        </div>
+    {/if}
 </div>
 
 <style>
@@ -74,8 +227,8 @@
         color: black;
         min-width: 300px;
         overflow: hidden;
+        box-sizing: border-box;
     }
-
     .panel-header {
         background-color: #e0e0e0;
         color: #333;
@@ -85,13 +238,21 @@
         flex-shrink: 0;
     }
 
-    .score-wrapper {
+    .preview-container {
         flex: 1;
         overflow-y: auto;
-        padding: 20px;
+        overflow-x: hidden;
         font-family: "alphaTab";
         width: 100%;
+        max-width: 100%;
         box-sizing: border-box;
         display: block;
+        background-color: #fff; /* White background for score */
+        position: relative;
+    }
+
+    .score-scale-wrapper {
+        transform-origin: top left;
+        will-change: transform;
     }
 </style>

@@ -5,6 +5,7 @@ go 1.24.0
 toolchain go1.24.11
 
 require (
+	github.com/gen2brain/malgo v0.11.25
 	github.com/wailsapp/wails/v2 v2.11.0
 	modernc.org/sqlite v1.33.1
 )
