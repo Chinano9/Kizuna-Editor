@@ -49,6 +49,7 @@ type Track struct {
 type AudioVersion struct {
 	ID          int       `db:"id" json:"id"`
 	SongID      int       `db:"song_id" json:"song_id"`
+	TrackID     *int      `db:"track_id" json:"track_id,omitempty"` // Nullable: can be nil for global project audio/choruses
 	VersionName string    `db:"version_name" json:"version_name"`
 	FilePath    string    `db:"file_path" json:"file_path"`
 	Notes       string    `db:"notes" json:"notes"`

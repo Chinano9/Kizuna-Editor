@@ -158,3 +158,16 @@ func TestWriteWavFile(t *testing.T) {
 		t.Errorf("expected SubChunk2Size %d, got %d", len(pcmData), subChunk2Size)
 	}
 }
+
+func TestGetInputDevices(t *testing.T) {
+	devices, err := GetInputDevices()
+	if err != nil {
+		t.Logf("GetInputDevices returned error (expected if no input hardware or drivers): %v", err)
+		return
+	}
+	t.Logf("Found %d input devices", len(devices))
+	for _, dev := range devices {
+		t.Logf("Device - ID: %s, Name: %s", dev.ID, dev.Name)
+	}
+}
+

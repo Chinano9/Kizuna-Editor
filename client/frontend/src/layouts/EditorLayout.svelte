@@ -5,6 +5,7 @@
     import Editor from "@/components/Editor.svelte";
     import ScoreViewer from "@/components/ScoreViewer.svelte";
     import TrackTabs from "@/components/TrackTabs.svelte";
+    import Workbar from "@/components/Workbar.svelte";
 
     import { songId, song } from "@/stores/projectStore";
     import { currentView } from "@/stores/viewStore";
@@ -89,6 +90,10 @@
             <div class="placeholder">Select a track to start editing.</div>
         {/if}
     </div>
+
+    {#if activeTrack}
+        <Workbar songID={$songId} activeTrack={activeTrack} />
+    {/if}
 </div>
 
 <style>
@@ -127,6 +132,7 @@
         overflow: hidden;
         width: 100%;
         height: 100%;
+        padding-bottom: 85px; /* Prevent fixed bottom Workbar from covering scrollable sheet music and editing areas */
     }
 
     .placeholder {

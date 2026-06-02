@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 )
 
 // App struct represents the main application state.
@@ -33,6 +34,7 @@ type App struct {
 	ctx           context.Context
 	db            *DBManager
 	audioRecorder *recorder.AudioRecorder
+	audioPlayer   *recorder.AudioPlayer
 }
 
 // NewApp creates a new App application struct.
@@ -40,6 +42,7 @@ func NewApp() *App {
 	return &App{
 		db:            NewDBManager(),
 		audioRecorder: recorder.NewAudioRecorder(),
+		audioPlayer:   recorder.NewAudioPlayer(),
 	}
 }
 
@@ -141,59 +144,70 @@ func (a *App) shutdown(ctx context.Context) {
 			log.Println("Error closing DB during shutdown:", err)
 		}
 	}
+	recorder.TeardownSharedContext()
 	log.Println("App shutdown complete")
 }
 
-// StartRecording starts capturing audio from the native input device for the given song track.
+// StartRecording starts capturing audio from the designated input device.
 // Exposed to Wails (Frontend).
-func (a *App) StartRecording(songID int, trackName string) error {
-	log.Printf("StartRecording called for Song ID: %d, Track Name: '%s'", songID, trackName)
+func (a *App) StartRecording(songID int, trackName string, deviceID string) error {
+	log.Printf("StartRecording called for Song ID: %d, Track Name: '%s', Device ID: %s", songID, trackName, deviceID)
 	if a.audioRecorder == nil {
 		return fmt.Errorf("audio recorder is not initialized")
 	}
-	return a.audioRecorder.StartRecording(songID, trackName)
+	return a.audioRecorder.StartRecording(songID, trackName, deviceID)
 }
 
 // StopRecording stops active audio capture, saves the PCM data directly to disk as a WAV file,
-// registers the new track in SQLite, and returns the registered track struct.
+// registers the take as an AudioVersion (tied to trackID if > 0, otherwise global), and returns the new take struct.
 // Exposed to Wails (Frontend).
-func (a *App) StopRecording() (*models.Track, error) {
-	log.Println("StopRecording called")
+func (a *App) StopRecording(trackID int) (*models.AudioVersion, error) {
+	log.Printf("StopRecording called with Target Track ID: %d", trackID)
 	if a.audioRecorder == nil {
 		return nil, fmt.Errorf("audio recorder is not initialized")
 	}
 
-	// Get state before stopping
+	// 1. Get state before stopping
 	songID := a.audioRecorder.SongID
 	trackName := a.audioRecorder.TrackName
 
-	// 1. Stop recording and retrieve captured PCM frames
+	// 2. Stop hardware capture and retrieve PCM frames
 	pcmData, sampleRate, channels, bitsPerSample, err := a.audioRecorder.StopRecording()
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. Resolve absolute project WAV path
-	wavPath, err := a.getProjectAudioPath(songID, trackName)
+	// 3. Resolve absolute project WAV path
+	wavPath, err := a.getProjectAudioPath(songID, trackName, trackID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve audio path: %w", err)
 	}
 
-	// 3. Save raw PCM bytes directly to disk in .wav format
+	// 4. Save raw PCM bytes directly to disk in WAV format
 	log.Printf("Saving audio file to: %s", wavPath)
 	if err := recorder.WriteWavFile(wavPath, pcmData, sampleRate, channels, bitsPerSample); err != nil {
 		return nil, fmt.Errorf("failed to save WAV file to disk: %w", err)
 	}
 
-	// 4. Register the new track in SQLite database under data_content prefixed with "audio:"
-	log.Printf("Registering track '%s' in database for Song ID %d...", trackName, songID)
-	track, err := a.db.AddAudioTrack(songID, trackName, wavPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save audio track to database: %w", err)
+	// 5. Register the take inside SQLite 'audio_versions' table
+	var dbTrackID *int
+	var versionName string
+	if trackID > 0 {
+		dbTrackID = &trackID
+		versionName = fmt.Sprintf("Take: %s", trackName)
+	} else {
+		dbTrackID = nil
+		versionName = fmt.Sprintf("Global take: %s", trackName)
 	}
 
-	log.Printf("Audio track successfully recorded and registered: ID %d", track.ID)
-	return track, nil
+	log.Printf("Registering AudioVersion '%s' in database (Track ID pointer: %v)...", versionName, dbTrackID)
+	av, err := a.db.AddAudioVersion(songID, dbTrackID, versionName, wavPath, "Native Go recorded take")
+	if err != nil {
+		return nil, fmt.Errorf("failed to save audio version to database: %w", err)
+	}
+
+	log.Printf("Audio version successfully recorded and registered: ID %d", av.ID)
+	return av, nil
 }
 
 // GetAudioLevels retrieves the current real-time normalized audio peak amplitude [0.0, 1.0].
@@ -205,10 +219,111 @@ func (a *App) GetAudioLevels() float64 {
 	return a.audioRecorder.GetAudioLevels()
 }
 
+// GetInputDevices queries malgo to list all available physical microphone/capture devices.
+// Exposed to Wails (Frontend).
+func (a *App) GetInputDevices() ([]recorder.AudioDevice, error) {
+	return recorder.GetInputDevices()
+}
+
+// GetAvailableDrivers returns the list of audio driver backends supported by the active host OS.
+// Exposed to Wails (Frontend).
+func (a *App) GetAvailableDrivers() []string {
+	return recorder.GetAvailableDrivers()
+}
+
+// GetCurrentDriver returns the name of the currently active audio driver backend.
+// Exposed to Wails (Frontend).
+func (a *App) GetCurrentDriver() string {
+	return recorder.GetCurrentDriver()
+}
+
+// SetAudioDriver updates the active audio backend in Go and reinitializes the shared context.
+// Exposed to Wails (Frontend).
+func (a *App) SetAudioDriver(driverName string) error {
+	log.Printf("SetAudioDriver called: transitioning to driver '%s'", driverName)
+	return recorder.SetAudioDriver(driverName)
+}
+
+// PlayAudio loads the WAV audio file and starts native CGO playback.
+// Exposed to Wails (Frontend).
+func (a *App) PlayAudio(filePath string) error {
+	log.Printf("PlayAudio called for file: %s", filePath)
+	if a.audioPlayer == nil {
+		return fmt.Errorf("audio player is not initialized")
+	}
+	return a.audioPlayer.Play(filePath)
+}
+
+// PauseAudio pauses or resumes the active audio playback.
+// Exposed to Wails (Frontend).
+func (a *App) PauseAudio() error {
+	log.Println("PauseAudio called")
+	if a.audioPlayer == nil {
+		return fmt.Errorf("audio player is not initialized")
+	}
+	return a.audioPlayer.Pause()
+}
+
+// SeekAudio shifts the playback progress to the designated timestamp in seconds.
+// Exposed to Wails (Frontend).
+func (a *App) SeekAudio(seconds float64) error {
+	log.Printf("SeekAudio called for offset: %.2fs", seconds)
+	if a.audioPlayer == nil {
+		return fmt.Errorf("audio player is not initialized")
+	}
+	return a.audioPlayer.Seek(seconds)
+}
+
+// SetAudioVolume updates the real-time gain multiplier in Go in the range [0.0, 1.0].
+// Exposed to Wails (Frontend).
+func (a *App) SetAudioVolume(volume float64) error {
+	if a.audioPlayer == nil {
+		return fmt.Errorf("audio player is not initialized")
+	}
+	return a.audioPlayer.SetVolume(volume)
+}
+
+// GetPlaybackPosition returns the current playback progress in seconds.
+// Exposed to Wails (Frontend).
+func (a *App) GetPlaybackPosition() float64 {
+	if a.audioPlayer == nil {
+		return 0.0
+	}
+	return a.audioPlayer.GetPosition()
+}
+
+// GetPlaybackDuration returns the total duration of the currently loaded WAV in seconds.
+// Exposed to Wails (Frontend).
+func (a *App) GetPlaybackDuration() float64 {
+	if a.audioPlayer == nil {
+		return 0.0
+	}
+	return a.audioPlayer.GetDuration()
+}
+
+// GetAudioVersionsForTrack retrieves all audio versions associated with a specific track.
+// Exposed to Wails (Frontend).
+func (a *App) GetAudioVersionsForTrack(trackID int) ([]models.AudioVersion, error) {
+	return a.db.GetAudioVersionsForTrack(trackID)
+}
+
+// GetAudioVersionsForSong retrieves all audio versions for a song, including those that are global (track_id IS NULL).
+// Exposed to Wails (Frontend).
+func (a *App) GetAudioVersionsForSong(songID int) ([]models.AudioVersion, error) {
+	return a.db.GetAudioVersionsForSong(songID)
+}
+
 // getProjectAudioPath determines the absolute OS-appropriate project path to save the .wav file.
-func (a *App) getProjectAudioPath(songID int, trackName string) (string, error) {
-	// Clean trackName to prevent path traversal or invalid filesystem characters
+func (a *App) getProjectAudioPath(songID int, trackName string, trackID int) (string, error) {
 	safeTrackName := cleanFileName(trackName)
+	timestamp := time.Now().Format("20060102_150405")
+	
+	var filename string
+	if trackID > 0 {
+		filename = fmt.Sprintf("track_%d_%s_%s.wav", trackID, safeTrackName, timestamp)
+	} else {
+		filename = fmt.Sprintf("global_%s_%s.wav", safeTrackName, timestamp)
+	}
 
 	switch runtime.GOOS {
 	case "windows":
@@ -220,7 +335,7 @@ func (a *App) getProjectAudioPath(songID int, trackName string) (string, error) 
 			}
 			appdata = filepath.Join(home, "AppData", "Roaming")
 		}
-		return filepath.Join(appdata, "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", safeTrackName+".wav"), nil
+		return filepath.Join(appdata, "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", filename), nil
 	case "darwin":
 		configDir, err := os.UserConfigDir()
 		if err != nil {
@@ -230,17 +345,17 @@ func (a *App) getProjectAudioPath(songID int, trackName string) (string, error) 
 			}
 			configDir = filepath.Join(home, "Library", "Application Support")
 		}
-		return filepath.Join(configDir, "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", safeTrackName+".wav"), nil
+		return filepath.Join(configDir, "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", filename), nil
 	default:
 		xdg := os.Getenv("XDG_DATA_HOME")
 		if xdg != "" {
-			return filepath.Join(xdg, "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", safeTrackName+".wav"), nil
+			return filepath.Join(xdg, "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", filename), nil
 		}
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
 		}
-		return filepath.Join(home, ".local", "share", "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", safeTrackName+".wav"), nil
+		return filepath.Join(home, ".local", "share", "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", filename), nil
 	}
 }
 

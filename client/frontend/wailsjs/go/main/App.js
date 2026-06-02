@@ -14,8 +14,36 @@ export function GetAudioLevels() {
   return window['go']['main']['App']['GetAudioLevels']();
 }
 
+export function GetAudioVersionsForSong(arg1) {
+  return window['go']['main']['App']['GetAudioVersionsForSong'](arg1);
+}
+
+export function GetAudioVersionsForTrack(arg1) {
+  return window['go']['main']['App']['GetAudioVersionsForTrack'](arg1);
+}
+
+export function GetAvailableDrivers() {
+  return window['go']['main']['App']['GetAvailableDrivers']();
+}
+
+export function GetCurrentDriver() {
+  return window['go']['main']['App']['GetCurrentDriver']();
+}
+
+export function GetInputDevices() {
+  return window['go']['main']['App']['GetInputDevices']();
+}
+
 export function GetInstruments() {
   return window['go']['main']['App']['GetInstruments']();
+}
+
+export function GetPlaybackDuration() {
+  return window['go']['main']['App']['GetPlaybackDuration']();
+}
+
+export function GetPlaybackPosition() {
+  return window['go']['main']['App']['GetPlaybackPosition']();
 }
 
 export function GetRecentSongs() {
@@ -26,6 +54,14 @@ export function GetSong(arg1) {
   return window['go']['main']['App']['GetSong'](arg1);
 }
 
+export function PauseAudio() {
+  return window['go']['main']['App']['PauseAudio']();
+}
+
+export function PlayAudio(arg1) {
+  return window['go']['main']['App']['PlayAudio'](arg1);
+}
+
 export function SaveQuickIdea(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveQuickIdea'](arg1, arg2, arg3);
 }
@@ -34,12 +70,24 @@ export function SaveSong(arg1) {
   return window['go']['main']['App']['SaveSong'](arg1);
 }
 
-export function StartRecording(arg1, arg2) {
-  return window['go']['main']['App']['StartRecording'](arg1, arg2);
+export function SeekAudio(arg1) {
+  return window['go']['main']['App']['SeekAudio'](arg1);
 }
 
-export function StopRecording() {
-  return window['go']['main']['App']['StopRecording']();
+export function SetAudioDriver(arg1) {
+  return window['go']['main']['App']['SetAudioDriver'](arg1);
+}
+
+export function SetAudioVolume(arg1) {
+  return window['go']['main']['App']['SetAudioVolume'](arg1);
+}
+
+export function StartRecording(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartRecording'](arg1, arg2, arg3);
+}
+
+export function StopRecording(arg1) {
+  return window['go']['main']['App']['StopRecording'](arg1);
 }
 
 export function UpdateTrack(arg1) {

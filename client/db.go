@@ -489,6 +489,116 @@ func (m *DBManager) SaveSong(song *models.Song) (*models.Song, error) {
 	return song, nil
 }
 
+// AddAudioVersion inserts a new audio recording take/version linked to a song and optionally a track.
+func (m *DBManager) AddAudioVersion(songID int, trackID *int, versionName string, filePath string, notes string) (*models.AudioVersion, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+
+	query := `
+		INSERT INTO audio_versions (song_id, track_id, version_name, file_path, notes)
+		VALUES (?, ?, ?, ?, ?)`
+
+	res, err := m.db.Exec(query, songID, trackID, versionName, filePath, notes)
+	if err != nil {
+		return nil, fmt.Errorf("insert audio version: %w", err)
+	}
+
+	newID, err := res.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("get last insert id for audio version: %w", err)
+	}
+
+	// Retrieve the newly created audio version
+	var av models.AudioVersion
+	row := m.db.QueryRow("SELECT id, song_id, track_id, version_name, file_path, notes, created_at FROM audio_versions WHERE id = ?", newID)
+	
+	var trackIDNull sql.NullInt64
+	err = row.Scan(&av.ID, &av.SongID, &trackIDNull, &av.VersionName, &av.FilePath, &av.Notes, &av.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("retrieve new audio version: %w", err)
+	}
+
+	if trackIDNull.Valid {
+		val := int(trackIDNull.Int64)
+		av.TrackID = &val
+	} else {
+		av.TrackID = nil
+	}
+
+	return &av, nil
+}
+
+// GetAudioVersionsForTrack retrieves all audio versions associated with a specific track.
+func (m *DBManager) GetAudioVersionsForTrack(trackID int) ([]models.AudioVersion, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+
+	query := `
+		SELECT id, song_id, track_id, version_name, file_path, notes, created_at
+		FROM audio_versions WHERE track_id = ? ORDER BY created_at DESC`
+
+	rows, err := m.db.Query(query, trackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var versions []models.AudioVersion
+	for rows.Next() {
+		var av models.AudioVersion
+		var trackIDNull sql.NullInt64
+		err := rows.Scan(&av.ID, &av.SongID, &trackIDNull, &av.VersionName, &av.FilePath, &av.Notes, &av.CreatedAt)
+		if err != nil {
+			continue
+		}
+		if trackIDNull.Valid {
+			val := int(trackIDNull.Int64)
+			av.TrackID = &val
+		} else {
+			av.TrackID = nil
+		}
+		versions = append(versions, av)
+	}
+	return versions, nil
+}
+
+// GetAudioVersionsForSong retrieves all audio versions for a song, including those that are global (track_id IS NULL).
+func (m *DBManager) GetAudioVersionsForSong(songID int) ([]models.AudioVersion, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("database is not initialized")
+	}
+
+	query := `
+		SELECT id, song_id, track_id, version_name, file_path, notes, created_at
+		FROM audio_versions WHERE song_id = ? ORDER BY created_at DESC`
+
+	rows, err := m.db.Query(query, songID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var versions []models.AudioVersion
+	for rows.Next() {
+		var av models.AudioVersion
+		var trackIDNull sql.NullInt64
+		err := rows.Scan(&av.ID, &av.SongID, &trackIDNull, &av.VersionName, &av.FilePath, &av.Notes, &av.CreatedAt)
+		if err != nil {
+			continue
+		}
+		if trackIDNull.Valid {
+			val := int(trackIDNull.Int64)
+			av.TrackID = &val
+		} else {
+			av.TrackID = nil
+		}
+		versions = append(versions, av)
+	}
+	return versions, nil
+}
+
 // --- PRIVATE HELPERS ---
 
 func createFullSchema(db *sql.DB) error {
@@ -532,11 +642,13 @@ func createFullSchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS audio_versions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			song_id INTEGER NOT NULL,
+			track_id INTEGER,
 			version_name TEXT,
 			file_path TEXT NOT NULL,
 			notes TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE
+			FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
+			FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
 		);`,
 	}
 
@@ -545,6 +657,10 @@ func createFullSchema(db *sql.DB) error {
 			return fmt.Errorf("error executing schema query: %w", err)
 		}
 	}
+
+	// Schema migration: Add track_id column if it doesn't exist in older SQLite files (non-fatal)
+	_, _ = db.Exec("ALTER TABLE audio_versions ADD COLUMN track_id INTEGER REFERENCES tracks(id) ON DELETE CASCADE")
+
 	return nil
 }
 
