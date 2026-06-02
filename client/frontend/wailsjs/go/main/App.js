@@ -10,6 +10,10 @@ export function DeleteTrack(arg1) {
   return window['go']['main']['App']['DeleteTrack'](arg1);
 }
 
+export function GetAudioLevels() {
+  return window['go']['main']['App']['GetAudioLevels']();
+}
+
 export function GetInstruments() {
   return window['go']['main']['App']['GetInstruments']();
 }
@@ -28,6 +32,14 @@ export function SaveQuickIdea(arg1, arg2, arg3) {
 
 export function SaveSong(arg1) {
   return window['go']['main']['App']['SaveSong'](arg1);
+}
+
+export function StartRecording(arg1, arg2) {
+  return window['go']['main']['App']['StartRecording'](arg1, arg2);
+}
+
+export function StopRecording() {
+  return window['go']['main']['App']['StopRecording']();
 }
 
 export function UpdateTrack(arg1) {

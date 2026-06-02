@@ -6,6 +6,8 @@ export function AddTrack(arg1:number,arg2:string):Promise<models.Track>;
 
 export function DeleteTrack(arg1:number):Promise<void>;
 
+export function GetAudioLevels():Promise<number>;
+
 export function GetInstruments():Promise<Array<models.Instrument>>;
 
 export function GetRecentSongs():Promise<Array<models.Song>>;
@@ -15,5 +17,9 @@ export function GetSong(arg1:number):Promise<models.Song>;
 export function SaveQuickIdea(arg1:number,arg2:string,arg3:string):Promise<number>;
 
 export function SaveSong(arg1:models.Song):Promise<models.Song>;
+
+export function StartRecording(arg1:number,arg2:string):Promise<void>;
+
+export function StopRecording():Promise<models.Track>;
 
 export function UpdateTrack(arg1:models.Track):Promise<void>;

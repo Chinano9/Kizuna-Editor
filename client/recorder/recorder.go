@@ -42,8 +42,8 @@ type AudioRecorder struct {
 
 	// Recording State
 	isRecording  bool
-	songID       int
-	trackName    string
+	SongID       int
+	TrackName    string
 	capturedData []byte
 
 	// malgo specific handles
@@ -72,8 +72,8 @@ func (r *AudioRecorder) StartRecording(songID int, trackName string) error {
 	}
 
 	// 1. Reset state buffers
-	r.songID = songID
-	r.trackName = trackName
+	r.SongID = songID
+	r.TrackName = trackName
 	r.capturedData = r.capturedData[:0]
 	r.currentLevel = 0.0
 

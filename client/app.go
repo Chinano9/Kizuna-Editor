@@ -164,8 +164,8 @@ func (a *App) StopRecording() (*models.Track, error) {
 	}
 
 	// Get state before stopping
-	songID := a.audioRecorder.songID
-	trackName := a.audioRecorder.trackName
+	songID := a.audioRecorder.SongID
+	trackName := a.audioRecorder.TrackName
 
 	// 1. Stop recording and retrieve captured PCM frames
 	pcmData, sampleRate, channels, bitsPerSample, err := a.audioRecorder.StopRecording()
