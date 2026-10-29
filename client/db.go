@@ -15,36 +15,42 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
+
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
 
 	"kizuna/client/internal/database"
 	"kizuna/client/internal/database/migrator"
+	"kizuna/client/internal/repository"
+	"kizuna/client/internal/service"
 	"kizuna/shared/models"
 
 	_ "modernc.org/sqlite"
 )
 
 const (
-	InstrumentGuitarID = 1
-	defaultDBName      = "kizuna.db"
-	appFolderName      = "Kizuna"
+	InstrumentGuitarID = models.InstrumentElectricGuitarID
+	defaultDBName      = database.DefaultDBName
+	appFolderName      = database.DefaultAppFolder
 )
 
-// DBManager handles all direct database interactions.
+// DBManager serves as a facade coordinating data services and repository abstractions for the Wails desktop app.
 type DBManager struct {
-	db *sql.DB
+	db           *sql.DB
+	songService  *service.SongService
+	trackService *service.TrackService
+	albumService *service.AlbumService
+	audioService *service.AudioService
+	instRepo     repository.InstrumentRepository
 }
 
-// NewDBManager initializes the SQLite connection and ensures the schema exists.
-// The database file is created inside the user's OS-appropriate data directory
-// (e.g. %APPDATA%/Kizuna on Windows, ~/Library/Application Support/Kizuna on macOS,
-// or XDG data dir (typically ~/.local/share) on Linux). If the path cannot be
-// resolved or created, it falls back to a local file in the current working directory.
+// NewDBManager initializes the SQLite connection, executes pending versioned migrations,
+// seeds the default instrument catalog, and instantiates the domain service layer.
 func NewDBManager() *DBManager {
 	dbPath, err := database.ResolveDBPath(appFolderName, defaultDBName)
 	if err != nil {
@@ -63,24 +69,37 @@ func NewDBManager() *DBManager {
 		log.Fatal("Failed to open database:", err)
 	}
 
-	// Initialize and run versioned migrations
+	// Initialize and execute versioned migrations
 	m := migrator.NewMigrator(db)
 	if err := m.Migrate(); err != nil {
 		db.Close()
 		log.Fatal("Failed to execute database migrations:", err)
 	}
 
-	// Seed initial data (idempotent, non-fatal)
+	// Seed initial instrument catalog (idempotent)
 	if err := database.SeedInstruments(db); err != nil {
 		log.Println("Warning: Failed to seed instruments:", err)
 	}
 
-	return &DBManager{db: db}
+	return NewDBManagerWithDB(db)
 }
 
 // NewDBManagerWithDB instantiates DBManager with an existing database connection (e.g., for testing).
 func NewDBManagerWithDB(db *sql.DB) *DBManager {
-	return &DBManager{db: db}
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	albumRepo := repository.NewAlbumRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+	instRepo := repository.NewInstrumentRepository(db)
+
+	return &DBManager{
+		db:           db,
+		songService:  service.NewSongService(db, songRepo, trackRepo),
+		trackService: service.NewTrackService(trackRepo),
+		albumService: service.NewAlbumService(albumRepo, songRepo),
+		audioService: service.NewAudioService(audioRepo),
+		instRepo:     instRepo,
+	}
 }
 
 // Close safely closes the underlying database connection.
@@ -91,512 +110,150 @@ func (m *DBManager) Close() error {
 	return m.db.Close()
 }
 
-// SaveQuickIdea handles the "Upsert" logic for the editor.
-// It uses transactions to ensure data integrity between Songs and Tracks.
-func (m *DBManager) SaveQuickIdea(songID int, title string, content string) (int64, error) {
-	if m == nil || m.db == nil {
-		return 0, fmt.Errorf("database is not initialized")
-	}
-
-	tx, err := m.db.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() {
-		// If an error occurred and tx is still active, ensure rollback.
-		_ = tx.Rollback()
-	}()
-
-	var finalID int64
-
-	if songID == 0 {
-		res, err := tx.Exec("INSERT INTO songs (title, bpm) VALUES (?, ?)", title, 120)
-		if err != nil {
-			return 0, fmt.Errorf("insert song: %w", err)
-		}
-		finalID, err = res.LastInsertId()
-		if err != nil {
-			return 0, fmt.Errorf("last insert id (song): %w", err)
-		}
-
-		_, err = tx.Exec(`
-			INSERT INTO tracks (song_id, instrument_id, name, data_content)
-			VALUES (?, ?, ?, ?)`,
-			finalID, InstrumentGuitarID, "Lead Guitar", content)
-		if err != nil {
-			return 0, fmt.Errorf("insert initial track: %w", err)
-		}
-	} else {
-		finalID = int64(songID)
-
-		_, err := tx.Exec("UPDATE songs SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", title, songID)
-		if err != nil {
-			return 0, fmt.Errorf("update song title: %w", err)
-		}
-
-		res, err := tx.Exec("UPDATE tracks SET data_content = ? WHERE song_id = ? AND instrument_id = ?", content, songID, InstrumentGuitarID)
-		if err != nil {
-			return 0, fmt.Errorf("update track content: %w", err)
-		}
-
-		rowsAffected, err := res.RowsAffected()
-		if err != nil {
-			return 0, fmt.Errorf("rows affected check: %w", err)
-		}
-		if rowsAffected == 0 {
-			log.Printf("⚠️ Track missing for Song %d. Creating recovery track...", songID)
-			_, err = tx.Exec(`
-				INSERT INTO tracks (song_id, instrument_id, name, data_content)
-				VALUES (?, ?, ?, ?)`,
-				songID, InstrumentGuitarID, "Lead Guitar", content)
-			if err != nil {
-				return 0, fmt.Errorf("create recovery track: %w", err)
-			}
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit transaction: %w", err)
-	}
-
-	return finalID, nil
+// SongService returns the underlying SongService for direct access.
+func (m *DBManager) SongService() *service.SongService {
+	return m.songService
 }
 
-// GetSong retrieves a song and its associated tracks using the shared models.
+// TrackService returns the underlying TrackService for direct access.
+func (m *DBManager) TrackService() *service.TrackService {
+	return m.trackService
+}
+
+// AlbumService returns the underlying AlbumService for direct access.
+func (m *DBManager) AlbumService() *service.AlbumService {
+	return m.albumService
+}
+
+// AudioService returns the underlying AudioService for direct access.
+func (m *DBManager) AudioService() *service.AudioService {
+	return m.audioService
+}
+
+// SaveQuickIdea handles rapid idea creation and updates.
+func (m *DBManager) SaveQuickIdea(songID int, title string, content string) (int64, error) {
+	if m == nil || m.songService == nil {
+		return 0, fmt.Errorf("database service is not initialized")
+	}
+	return m.songService.SaveQuickIdea(context.Background(), songID, title, content)
+}
+
+// GetSong retrieves a song and its associated tracks.
 func (m *DBManager) GetSong(id int) (*models.Song, error) {
-	if m == nil || m.db == nil {
-		return nil, fmt.Errorf("database is not initialized")
+	if m == nil || m.songService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
 	}
-
-	var s models.Song
-
-	querySong := `
-		SELECT id, album_id, title, bpm, time_signature, key_signature, created_at, updated_at
-		FROM songs WHERE id = ?`
-
-	row := m.db.QueryRow(querySong, id)
-
-	var ts sql.NullString
-	var ks sql.NullString
-
-	err := row.Scan(
-		&s.ID, &s.AlbumID, &s.Title, &s.BPM,
-		&ts, &ks,
-		&s.CreatedAt, &s.UpdatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if ts.Valid {
-		s.TimeSignature = ts.String
-	} else {
-		s.TimeSignature = ""
-	}
-	if ks.Valid {
-		s.KeySignature = ks.String
-	} else {
-		s.KeySignature = ""
-	}
-
-	queryTracks := `
-		SELECT id, song_id, instrument_id, name, data_content, display_mode, is_muted, created_at
-		FROM tracks WHERE song_id = ?`
-
-	rows, err := m.db.Query(queryTracks, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var t models.Track
-		if err := rows.Scan(&t.ID, &t.SongID, &t.InstrumentID, &t.Name, &t.DataContent, &t.DisplayMode, &t.IsMuted, &t.CreatedAt); err != nil {
-			// skip malformed row but continue
-			continue
-		}
-		s.Tracks = append(s.Tracks, t)
-	}
-
-	return &s, nil
+	return m.songService.GetSong(context.Background(), id)
 }
 
 // AddTrack creates a new track for a song with default values.
 func (m *DBManager) AddTrack(songID int, trackName string) (*models.Track, error) {
-	if m == nil || m.db == nil {
-		return nil, fmt.Errorf("database is not initialized")
+	if m == nil || m.trackService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
 	}
-
-	const defaultContent = `\title "New Track"`
-	const defaultInstrumentID = 1 // Default to Electric Guitar
-
-	query := `
-		INSERT INTO tracks (song_id, instrument_id, name, data_content)
-		VALUES (?, ?, ?, ?)`
-
-	res, err := m.db.Exec(query, songID, defaultInstrumentID, trackName, defaultContent)
-	if err != nil {
-		return nil, fmt.Errorf("insert new track: %w", err)
-	}
-
-	newID, err := res.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("get last insert id for track: %w", err)
-	}
-
-	// Retrieve the newly created track to return it
-	var newTrack models.Track
-	err = m.db.QueryRow("SELECT id, song_id, instrument_id, name, data_content, display_mode, is_muted, created_at FROM tracks WHERE id = ?", newID).Scan(
-		&newTrack.ID, &newTrack.SongID, &newTrack.InstrumentID, &newTrack.Name, &newTrack.DataContent, &newTrack.DisplayMode, &newTrack.IsMuted, &newTrack.CreatedAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("retrieve new track: %w", err)
-	}
-
-	return &newTrack, nil
+	return m.trackService.AddTrack(context.Background(), songID, trackName)
 }
 
-// AddAudioTrack creates a new track for a song with recorded audio file path.
-// It sets the instrument ID to 5 (Vocals/Voice) by default, and stores the audio file
-// path in the data_content field prefixed with "audio:".
+// AddAudioTrack creates a new track for a song linked to a recorded audio file.
 func (m *DBManager) AddAudioTrack(songID int, trackName string, filePath string) (*models.Track, error) {
-	if m == nil || m.db == nil {
-		return nil, fmt.Errorf("database is not initialized")
+	if m == nil || m.trackService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
 	}
-
-	const vocalInstrumentID = 5 // InstrumentCatalog ID for Vocals/Voice
-	audioContent := "audio:" + filePath
-
-	query := `
-		INSERT INTO tracks (song_id, instrument_id, name, data_content, display_mode)
-		VALUES (?, ?, ?, ?, 'BOTH')`
-
-	res, err := m.db.Exec(query, songID, vocalInstrumentID, trackName, audioContent)
-	if err != nil {
-		return nil, fmt.Errorf("insert audio track: %w", err)
-	}
-
-	newID, err := res.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("get last insert id for audio track: %w", err)
-	}
-
-	// Retrieve the newly created track to return it
-	var newTrack models.Track
-	err = m.db.QueryRow("SELECT id, song_id, instrument_id, name, data_content, display_mode, is_muted, created_at FROM tracks WHERE id = ?", newID).Scan(
-		&newTrack.ID, &newTrack.SongID, &newTrack.InstrumentID, &newTrack.Name, &newTrack.DataContent, &newTrack.DisplayMode, &newTrack.IsMuted, &newTrack.CreatedAt,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("retrieve new audio track: %w", err)
-	}
-
-	return &newTrack, nil
+	return m.trackService.AddAudioTrack(context.Background(), songID, trackName, filePath)
 }
 
 // DeleteTrack removes a track by its ID.
 func (m *DBManager) DeleteTrack(trackID int) error {
-	if m == nil || m.db == nil {
-		return fmt.Errorf("database is not initialized")
+	if m == nil || m.trackService == nil {
+		return fmt.Errorf("database service is not initialized")
 	}
-
-	_, err := m.db.Exec("DELETE FROM tracks WHERE id = ?", trackID)
-	if err != nil {
-		return fmt.Errorf("delete track: %w", err)
-	}
-	return nil
+	return m.trackService.DeleteTrack(context.Background(), trackID)
 }
 
 // UpdateTrack updates all fields of a given track.
 func (m *DBManager) UpdateTrack(track *models.Track) error {
-	if m == nil || m.db == nil {
-		return fmt.Errorf("database is not initialized")
+	if m == nil || m.trackService == nil {
+		return fmt.Errorf("database service is not initialized")
 	}
-	if track == nil {
-		return fmt.Errorf("track cannot be nil")
-	}
-
-	query := `
-		UPDATE tracks SET
-			name = ?,
-			data_content = ?,
-			instrument_id = ?,
-			display_mode = ?,
-			is_muted = ?
-		WHERE id = ?`
-
-	_, err := m.db.Exec(query,
-		track.Name,
-		track.DataContent,
-		track.InstrumentID,
-		track.DisplayMode,
-		track.IsMuted,
-		track.ID,
-	)
-
-	if err != nil {
-		return fmt.Errorf("update track: %w", err)
-	}
-	return nil
+	return m.trackService.UpdateTrack(context.Background(), track)
 }
 
-// GetRecentSongs returns a lightweight list of recent songs for the dashboard.
+// GetRecentSongs returns a list of recent songs for the dashboard.
 func (m *DBManager) GetRecentSongs() ([]models.Song, error) {
-	if m == nil || m.db == nil {
-		return nil, fmt.Errorf("database is not initialized")
+	if m == nil || m.songService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
 	}
-
-	query := `SELECT id, title, updated_at FROM songs ORDER BY updated_at DESC LIMIT 10`
-	rows, err := m.db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var songs []models.Song
-	for rows.Next() {
-		var s models.Song
-		if err := rows.Scan(&s.ID, &s.Title, &s.UpdatedAt); err != nil {
-			continue
-		}
-		songs = append(songs, s)
-	}
-	return songs, nil
+	return m.songService.GetRecentSongs(context.Background(), 10)
 }
 
-// GetInstruments retrieves all available instruments from the database.
+// GetInstruments retrieves all available catalog instruments.
 func (m *DBManager) GetInstruments() ([]models.Instrument, error) {
-	if m == nil || m.db == nil {
-		return nil, fmt.Errorf("database is not initialized")
+	if m == nil || m.instRepo == nil {
+		return nil, fmt.Errorf("database repository is not initialized")
 	}
-
-	query := `SELECT id, name, type, default_clef FROM instruments ORDER BY name`
-	rows, err := m.db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var instruments []models.Instrument
-	for rows.Next() {
-		var i models.Instrument
-		if err := rows.Scan(&i.ID, &i.Name, &i.Type, &i.DefaultClef); err != nil {
-			log.Printf("Error scanning instrument row: %v", err)
-			continue
-		}
-		instruments = append(instruments, i)
-	}
-	return instruments, nil
+	return m.instRepo.GetAll(context.Background())
 }
 
-// SaveSong handles the full "Upsert" logic for a song and its associated tracks.
-// It uses a transaction to ensure data integrity.
+// SaveSong executes an atomic upsert of a song and its associated tracks.
 func (m *DBManager) SaveSong(song *models.Song) (*models.Song, error) {
-	if m == nil || m.db == nil {
-		return nil, fmt.Errorf("database is not initialized")
+	if m == nil || m.songService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
 	}
-
-	tx, err := m.db.Begin()
-	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
-	}
-	// Defer a rollback. It will be ignored if the transaction is committed.
-	defer tx.Rollback()
-
-	// --- Step 1: Upsert the Song ---
-	if song.ID == 0 {
-		// INSERT new song
-		res, err := tx.Exec("INSERT INTO songs (title, bpm, time_signature, key_signature) VALUES (?, ?, ?, ?)",
-			song.Title, song.BPM, song.TimeSignature, song.KeySignature)
-		if err != nil {
-			return nil, fmt.Errorf("insert song: %w", err)
-		}
-		newID, err := res.LastInsertId()
-		if err != nil {
-			return nil, fmt.Errorf("get last insert id for song: %w", err)
-		}
-		song.ID = int(newID)
-	} else {
-		// UPDATE existing song
-		_, err := tx.Exec("UPDATE songs SET title = ?, bpm = ?, time_signature = ?, key_signature = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-			song.Title, song.BPM, song.TimeSignature, song.KeySignature, song.ID)
-		if err != nil {
-			return nil, fmt.Errorf("update song: %w", err)
-		}
-	}
-
-	// --- Step 2: Handle Deleted Tracks ---
-	// Get all track IDs currently in the DB for this song
-	rows, err := tx.Query("SELECT id FROM tracks WHERE song_id = ?", song.ID)
-	if err != nil {
-		return nil, fmt.Errorf("query existing track ids: %w", err)
-	}
-	defer rows.Close()
-	existingTrackIDs := make(map[int]bool)
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan existing track id: %w", err)
-		}
-		existingTrackIDs[id] = true
-	}
-
-	// Find which tracks to delete
-	incomingTrackIDs := make(map[int]bool)
-	for _, track := range song.Tracks {
-		if track.ID != 0 {
-			incomingTrackIDs[track.ID] = true
-		}
-	}
-
-	for id := range existingTrackIDs {
-		if !incomingTrackIDs[id] {
-			// This ID exists in the DB but not in the incoming song object; delete it.
-			_, err := tx.Exec("DELETE FROM tracks WHERE id = ?", id)
-			if err != nil {
-				return nil, fmt.Errorf("delete track %d: %w", id, err)
-			}
-		}
-	}
-
-	// --- Step 3: Upsert Tracks ---
-	for i := range song.Tracks {
-		track := &song.Tracks[i] // Use a pointer to modify the track in the slice
-		if track.ID == 0 {
-			// INSERT new track
-			res, err := tx.Exec("INSERT INTO tracks (song_id, instrument_id, name, data_content, display_mode, is_muted) VALUES (?, ?, ?, ?, ?, ?)",
-				song.ID, track.InstrumentID, track.Name, track.DataContent, track.DisplayMode, track.IsMuted)
-			if err != nil {
-				return nil, fmt.Errorf("insert track: %w", err)
-			}
-			newID, err := res.LastInsertId()
-			if err != nil {
-				return nil, fmt.Errorf("get last insert id for track: %w", err)
-			}
-			track.ID = int(newID) // Update the ID in the original object
-		} else {
-			// UPDATE existing track
-			_, err := tx.Exec("UPDATE tracks SET instrument_id = ?, name = ?, data_content = ?, display_mode = ?, is_muted = ? WHERE id = ?",
-				track.InstrumentID, track.Name, track.DataContent, track.DisplayMode, track.IsMuted, track.ID)
-			if err != nil {
-				return nil, fmt.Errorf("update track %d: %w", track.ID, err)
-			}
-		}
-	}
-
-	// --- Step 4: Commit Transaction ---
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit transaction: %w", err)
-	}
-
-	return song, nil
+	return m.songService.SaveSong(context.Background(), song)
 }
 
-// AddAudioVersion inserts a new audio recording take/version linked to a song and optionally a track.
+// AddAudioVersion logs a new recorded take linked to a song and optionally a track.
 func (m *DBManager) AddAudioVersion(songID int, trackID *int, versionName string, filePath string, notes string) (*models.AudioVersion, error) {
-	if m == nil || m.db == nil {
-		return nil, fmt.Errorf("database is not initialized")
+	if m == nil || m.audioService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
 	}
-
-	query := `
-		INSERT INTO audio_versions (song_id, track_id, version_name, file_path, notes)
-		VALUES (?, ?, ?, ?, ?)`
-
-	res, err := m.db.Exec(query, songID, trackID, versionName, filePath, notes)
-	if err != nil {
-		return nil, fmt.Errorf("insert audio version: %w", err)
-	}
-
-	newID, err := res.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("get last insert id for audio version: %w", err)
-	}
-
-	// Retrieve the newly created audio version
-	var av models.AudioVersion
-	row := m.db.QueryRow("SELECT id, song_id, track_id, version_name, file_path, notes, created_at FROM audio_versions WHERE id = ?", newID)
-	
-	var trackIDNull sql.NullInt64
-	err = row.Scan(&av.ID, &av.SongID, &trackIDNull, &av.VersionName, &av.FilePath, &av.Notes, &av.CreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("retrieve new audio version: %w", err)
-	}
-
-	if trackIDNull.Valid {
-		val := int(trackIDNull.Int64)
-		av.TrackID = &val
-	} else {
-		av.TrackID = nil
-	}
-
-	return &av, nil
+	return m.audioService.RegisterAudioVersion(context.Background(), songID, trackID, versionName, filePath, notes)
 }
 
-// GetAudioVersionsForTrack retrieves all audio versions associated with a specific track.
+// GetAudioVersionsForTrack retrieves all takes for a specific track.
 func (m *DBManager) GetAudioVersionsForTrack(trackID int) ([]models.AudioVersion, error) {
-	if m == nil || m.db == nil {
-		return nil, fmt.Errorf("database is not initialized")
+	if m == nil || m.audioService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
 	}
-
-	query := `
-		SELECT id, song_id, track_id, version_name, file_path, notes, created_at
-		FROM audio_versions WHERE track_id = ? ORDER BY created_at DESC`
-
-	rows, err := m.db.Query(query, trackID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var versions []models.AudioVersion
-	for rows.Next() {
-		var av models.AudioVersion
-		var trackIDNull sql.NullInt64
-		err := rows.Scan(&av.ID, &av.SongID, &trackIDNull, &av.VersionName, &av.FilePath, &av.Notes, &av.CreatedAt)
-		if err != nil {
-			continue
-		}
-		if trackIDNull.Valid {
-			val := int(trackIDNull.Int64)
-			av.TrackID = &val
-		} else {
-			av.TrackID = nil
-		}
-		versions = append(versions, av)
-	}
-	return versions, nil
+	return m.audioService.GetAudioVersionsForTrack(context.Background(), trackID)
 }
 
-// GetAudioVersionsForSong retrieves all audio versions for a song, including those that are global (track_id IS NULL).
+// GetAudioVersionsForSong retrieves all takes for a song (including global takes).
 func (m *DBManager) GetAudioVersionsForSong(songID int) ([]models.AudioVersion, error) {
-	if m == nil || m.db == nil {
-		return nil, fmt.Errorf("database is not initialized")
+	if m == nil || m.audioService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
 	}
+	return m.audioService.GetAudioVersionsForSong(context.Background(), songID)
+}
 
-	query := `
-		SELECT id, song_id, track_id, version_name, file_path, notes, created_at
-		FROM audio_versions WHERE song_id = ? ORDER BY created_at DESC`
-
-	rows, err := m.db.Query(query, songID)
-	if err != nil {
-		return nil, err
+// CreateAlbum creates a new album container (Issue #6).
+func (m *DBManager) CreateAlbum(title, artist, description string) (*models.Album, error) {
+	if m == nil || m.albumService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
 	}
-	defer rows.Close()
+	return m.albumService.CreateAlbum(context.Background(), title, artist, description)
+}
 
-	var versions []models.AudioVersion
-	for rows.Next() {
-		var av models.AudioVersion
-		var trackIDNull sql.NullInt64
-		err := rows.Scan(&av.ID, &av.SongID, &trackIDNull, &av.VersionName, &av.FilePath, &av.Notes, &av.CreatedAt)
-		if err != nil {
-			continue
-		}
-		if trackIDNull.Valid {
-			val := int(trackIDNull.Int64)
-			av.TrackID = &val
-		} else {
-			av.TrackID = nil
-		}
-		versions = append(versions, av)
+// GetAlbum retrieves an album by its ID (Issue #8).
+func (m *DBManager) GetAlbum(id int) (*models.Album, error) {
+	if m == nil || m.albumService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
 	}
-	return versions, nil
+	return m.albumService.GetAlbum(context.Background(), id)
+}
+
+// ListAlbums lists all albums in the library (Issue #8).
+func (m *DBManager) ListAlbums() ([]models.Album, error) {
+	if m == nil || m.albumService == nil {
+		return nil, fmt.Errorf("database service is not initialized")
+	}
+	return m.albumService.ListAlbums(context.Background())
+}
+
+// AssignSongToAlbum links a song to an album (Issue #7).
+func (m *DBManager) AssignSongToAlbum(songID int, albumID int) error {
+	if m == nil || m.albumService == nil {
+		return fmt.Errorf("database service is not initialized")
+	}
+	return m.albumService.AssignSongToAlbum(context.Background(), songID, albumID)
 }
