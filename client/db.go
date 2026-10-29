@@ -21,11 +21,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
-	"runtime"
 
-	// Import shared models package (defines Song/Track structs used across client and server)
+	"kizuna/client/internal/database"
+	"kizuna/client/internal/database/migrator"
 	"kizuna/shared/models"
 
 	_ "modernc.org/sqlite"
@@ -48,36 +46,40 @@ type DBManager struct {
 // or XDG data dir (typically ~/.local/share) on Linux). If the path cannot be
 // resolved or created, it falls back to a local file in the current working directory.
 func NewDBManager() *DBManager {
-	dbPath, err := getDefaultDBPath()
+	dbPath, err := database.ResolveDBPath(appFolderName, defaultDBName)
 	if err != nil {
-		log.Println("Warning: couldn't determine default DB path:", err)
-		log.Println("Falling back to local file:", defaultDBName)
+		log.Printf("Warning: couldn't determine default DB path (%v), using local fallback: %s\n", err, defaultDBName)
 		dbPath = defaultDBName
-	} else {
-		// Ensure the parent directory exists
-		if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-			log.Println("Warning: couldn't create DB directory:", err)
-			log.Println("Falling back to local file:", defaultDBName)
-			dbPath = defaultDBName
-		}
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	if err := database.EnsureDirectory(dbPath); err != nil {
+		log.Printf("Warning: couldn't create DB directory (%v), falling back to local file: %s\n", err, defaultDBName)
+		dbPath = defaultDBName
+	}
+
+	cfg := database.DefaultConfig(dbPath)
+	db, err := database.Open(cfg)
 	if err != nil {
 		log.Fatal("Failed to open database:", err)
 	}
 
-	// Initialize Schema
-	if err := createFullSchema(db); err != nil {
+	// Initialize and run versioned migrations
+	m := migrator.NewMigrator(db)
+	if err := m.Migrate(); err != nil {
 		db.Close()
-		log.Fatal("Failed to create schema:", err)
+		log.Fatal("Failed to execute database migrations:", err)
 	}
 
-	// Seed Initial Data (non-fatal)
-	if err := seedInstruments(db); err != nil {
+	// Seed initial data (idempotent, non-fatal)
+	if err := database.SeedInstruments(db); err != nil {
 		log.Println("Warning: Failed to seed instruments:", err)
 	}
 
+	return &DBManager{db: db}
+}
+
+// NewDBManagerWithDB instantiates DBManager with an existing database connection (e.g., for testing).
+func NewDBManagerWithDB(db *sql.DB) *DBManager {
 	return &DBManager{db: db}
 }
 
@@ -597,133 +599,4 @@ func (m *DBManager) GetAudioVersionsForSong(songID int) ([]models.AudioVersion, 
 		versions = append(versions, av)
 	}
 	return versions, nil
-}
-
-// --- PRIVATE HELPERS ---
-
-func createFullSchema(db *sql.DB) error {
-	queries := []string{
-		`CREATE TABLE IF NOT EXISTS albums (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			title TEXT NOT NULL,
-			artist TEXT,
-			description TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		);`,
-		`CREATE TABLE IF NOT EXISTS songs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			album_id INTEGER,
-			title TEXT NOT NULL,
-			bpm INTEGER DEFAULT 120,
-			time_signature TEXT DEFAULT '4/4',
-			key_signature TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE SET NULL
-		);`,
-		`CREATE TABLE IF NOT EXISTS instruments (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name TEXT NOT NULL,
-			type TEXT NOT NULL,
-			default_clef TEXT DEFAULT 'treble'
-		);`,
-		`CREATE TABLE IF NOT EXISTS tracks (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			song_id INTEGER NOT NULL,
-			instrument_id INTEGER NOT NULL,
-			name TEXT NOT NULL,
-			data_content TEXT NOT NULL,
-			display_mode TEXT DEFAULT 'BOTH',
-			is_muted BOOLEAN DEFAULT 0,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
-			FOREIGN KEY (instrument_id) REFERENCES instruments(id)
-		);`,
-		`CREATE TABLE IF NOT EXISTS audio_versions (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			song_id INTEGER NOT NULL,
-			track_id INTEGER,
-			version_name TEXT,
-			file_path TEXT NOT NULL,
-			notes TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
-			FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
-		);`,
-	}
-
-	for _, q := range queries {
-		if _, err := db.Exec(q); err != nil {
-			return fmt.Errorf("error executing schema query: %w", err)
-		}
-	}
-
-	// Schema migration: Add track_id column if it doesn't exist in older SQLite files (non-fatal)
-	_, _ = db.Exec("ALTER TABLE audio_versions ADD COLUMN track_id INTEGER REFERENCES tracks(id) ON DELETE CASCADE")
-
-	return nil
-}
-
-func seedInstruments(db *sql.DB) error {
-	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM instruments").Scan(&count)
-	if err != nil {
-		// If the table doesn't exist yet, return nil so caller can decide.
-		return err
-	}
-
-	if count == 0 {
-		log.Println("Seeding initial instruments...")
-		instruments := []string{
-			"INSERT INTO instruments (id, name, type, default_clef) VALUES (1, 'Electric Guitar', 'String', 'treble')",
-			"INSERT INTO instruments (name, type, default_clef) VALUES ('Bass', 'String', 'bass')",
-			"INSERT INTO instruments (name, type, default_clef) VALUES ('Piano', 'Keys', 'treble')",
-			"INSERT INTO instruments (name, type, default_clef) VALUES ('Drums', 'Percussion', 'percussion')",
-			"INSERT INTO instruments (name, type, default_clef) VALUES ('Vocals', 'Voice', 'treble')",
-		}
-		for _, ins := range instruments {
-			if _, err := db.Exec(ins); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// getDefaultDBPath returns a sensible default path for the database depending on OS.
-func getDefaultDBPath() (string, error) {
-	switch runtime.GOOS {
-	case "windows":
-		appdata := os.Getenv("APPDATA")
-		if appdata == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", err
-			}
-			appdata = filepath.Join(home, "AppData", "Roaming")
-		}
-		return filepath.Join(appdata, appFolderName, defaultDBName), nil
-	case "darwin":
-		// macOS: ~/Library/Application Support
-		configDir, err := os.UserConfigDir()
-		if err != nil {
-			home, herr := os.UserHomeDir()
-			if herr != nil {
-				return "", err
-			}
-			configDir = filepath.Join(home, "Library", "Application Support")
-		}
-		return filepath.Join(configDir, appFolderName, defaultDBName), nil
-	default:
-		// Linux / other: prefer XDG_DATA_HOME, otherwise ~/.local/share
-		xdg := os.Getenv("XDG_DATA_HOME")
-		if xdg != "" {
-			return filepath.Join(xdg, appFolderName, defaultDBName), nil
-		}
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(home, ".local", "share", appFolderName, defaultDBName), nil
-	}
 }
