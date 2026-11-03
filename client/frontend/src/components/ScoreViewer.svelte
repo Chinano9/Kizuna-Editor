@@ -23,11 +23,11 @@
     import { injectBars } from "../lib/musicUtils";
     import { autoBar } from "../stores/projectStore";
     import { instrumentStore } from "@/stores/instrumentStore";
-    import type { main } from "../../../wailsjs/go/models";
+    import type { Track } from "@shared/types/wails";
 
     import LyricsViewer from "./LyricsViewer.svelte";
 
-    export let track: main.Track | null = null;
+    export let track: Track | null = null;
 
     let scoreContainer: HTMLElement;
     let api: any;
@@ -139,7 +139,7 @@
     $: updateAlphaTab(track, instrumentName, $autoBar);
 
     async function updateAlphaTab(
-        currentTrack: main.Track | null,
+        currentTrack: Track | null,
         currentInstrumentName: string,
         auto: boolean,
     ) {

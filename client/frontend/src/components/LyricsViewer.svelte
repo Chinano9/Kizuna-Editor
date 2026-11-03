@@ -24,7 +24,7 @@
 
     $: {
         if (typeof source === "string") {
-            renderedHtml = marked(source);
+            renderedHtml = marked.parse(source, { async: false }) as string;
         } else {
             renderedHtml = "<p>Invalid track data.</p>";
         }

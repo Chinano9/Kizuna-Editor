@@ -10,9 +10,9 @@
     import { songId, song } from "@/stores/projectStore";
     import { currentView } from "@/stores/viewStore";
     import { activeTrackIndex } from "@/stores/trackStore";
-    import type { main } from "../../wailsjs/go/models";
+    import { Track, Song } from "@shared/types/wails";
 
-    let activeTrack: main.Track | null = null;
+    let activeTrack: Track | null = null;
 
     // --- Reactive Data Loading ---
     $: {
@@ -22,7 +22,7 @@
     async function loadSong(id: number) {
         if (id === 0) {
             // Create a default structure for a new song
-            const newTrack: main.Track = {
+            const newTrack = new Track({
                 id: 0,
                 song_id: 0,
                 instrument_id: 1, // Default to guitar
@@ -31,19 +31,17 @@
                 display_mode: "BOTH",
                 is_muted: false,
                 created_at: new Date().toISOString(),
-            };
-            const newSong: main.Song = {
+            });
+            const newSong = new Song({
                 id: 0,
                 title: "My New Idea",
                 tracks: [newTrack],
-                // Set other defaults as needed
-                album_id: null,
                 bpm: 120,
                 time_signature: "4/4",
                 key_signature: "",
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString(),
-            };
+            });
             song.set(newSong);
             activeTrackIndex.set(0);
             return;

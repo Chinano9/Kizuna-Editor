@@ -1,9 +1,9 @@
 import { writable, get } from "svelte/store";
-import type { main } from "../../wailsjs/go/models";
-import { GetInstruments } from "../../wailsjs/go/main/App";
+import type { Instrument } from "@shared/types/wails";
+import { GetInstruments } from "@wails/go/main/App";
 
 // Create a writable store to hold the list of instruments
-const { subscribe, set } = writable<main.Instrument[]>([]);
+const { subscribe, set } = writable<Instrument[]>([]);
 
 let instrumentsLoaded = false;
 

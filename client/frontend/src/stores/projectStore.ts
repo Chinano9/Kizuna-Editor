@@ -17,7 +17,7 @@
 */
 
 import { writable } from "svelte/store";
-import type { main } from "../../../wailsjs/go/models";
+import type { Song } from "@shared/types/wails";
 
 /**
  * projectStore.ts
@@ -35,4 +35,4 @@ export const songTitle = writable<string>("My New Idea");
 export const autoBar = writable<boolean>(true);
 
 // Holds the full song object, including all its tracks.
-export const song = writable<main.Song | null>(null);
+export const song = writable<Song | null>(null);
