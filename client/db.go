@@ -130,6 +130,11 @@ func (m *DBManager) AudioService() *service.AudioService {
 	return m.audioService
 }
 
+// InstrumentRepository returns the underlying InstrumentRepository for direct access.
+func (m *DBManager) InstrumentRepository() repository.InstrumentRepository {
+	return m.instRepo
+}
+
 // SaveQuickIdea handles rapid idea creation and updates.
 func (m *DBManager) SaveQuickIdea(songID int, title string, content string) (int64, error) {
 	if m == nil || m.songService == nil {

@@ -47,6 +47,10 @@ func main() {
 		OnShutdown:       app.shutdown,
 		Bind: []interface{}{
 			app,
+			app.SongHandler(),
+			app.TrackHandler(),
+			app.AlbumHandler(),
+			app.AudioHandler(),
 		},
 	})
 
