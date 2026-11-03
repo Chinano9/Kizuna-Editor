@@ -16,8 +16,8 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import './style.css';
-import App from './App.svelte';
+import '@shared/styles/global.css';
+import App from '@app/App.svelte';
 
 const target = document.getElementById('app');
 if (!target) {
