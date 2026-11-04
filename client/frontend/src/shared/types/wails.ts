@@ -16,7 +16,7 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { models as WailsModels, recorder as WailsRecorder } from "@wails/go/models";
+import { models as WailsModels, audio as WailsAudio } from "@wails/go/models";
 
 // Tipos y clases de dominio principales exportados limpiamente
 export const Song = WailsModels.Song;
@@ -31,12 +31,12 @@ export type Instrument = WailsModels.Instrument;
 export const AudioVersion = WailsModels.AudioVersion;
 export type AudioVersion = WailsModels.AudioVersion;
 
-export const AudioDevice = WailsRecorder.AudioDevice;
-export type AudioDevice = WailsRecorder.AudioDevice;
+export const AudioDevice = WailsAudio.AudioDevice;
+export type AudioDevice = WailsAudio.AudioDevice;
 
 // Constructores y fábricas auxiliares
 export const SongModel = WailsModels.Song;
 export const TrackModel = WailsModels.Track;
 export const InstrumentModel = WailsModels.Instrument;
 export const AudioVersionModel = WailsModels.AudioVersion;
-export const AudioDeviceModel = WailsRecorder.AudioDevice;
+export const AudioDeviceModel = WailsAudio.AudioDevice;
