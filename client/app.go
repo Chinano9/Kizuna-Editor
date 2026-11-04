@@ -15,364 +15,233 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
+
 package main
 
 import (
 	"context"
-	"fmt"
-	"kizuna/client/recorder"
+	"kizuna/client/bindings"
+	"kizuna/client/internal/audio"
 	"kizuna/shared/models"
 	"log"
-	"os"
-	"path/filepath"
-	"runtime"
-	"time"
 )
 
-// App struct represents the main application state.
+// App struct represents the main application state and acts as the Wails presentation facade.
 type App struct {
-	ctx           context.Context
-	db            *DBManager
-	audioRecorder *recorder.AudioRecorder
-	audioPlayer   *recorder.AudioPlayer
+	ctx          context.Context
+	db           *DBManager
+	audioRec     *audio.AudioRecorder
+	audioPlay    *audio.AudioPlayer
+	songHandler  *bindings.SongHandler
+	trackHandler *bindings.TrackHandler
+	albumHandler *bindings.AlbumHandler
+	audioHandler *bindings.AudioHandler
 }
 
-// NewApp creates a new App application struct.
+// NewApp creates a new App application struct wiring up clean dependency injection.
 func NewApp() *App {
+	db := NewDBManager()
+	audioRec := audio.NewAudioRecorder()
+	audioPlay := audio.NewAudioPlayer()
+
+	songHandler := bindings.NewSongHandler(db.SongService())
+	trackHandler := bindings.NewTrackHandler(db.TrackService(), db.InstrumentRepository())
+	albumHandler := bindings.NewAlbumHandler(db.AlbumService())
+	audioHandler := bindings.NewAudioHandler(audioRec, audioPlay, db.AudioService())
+
 	return &App{
-		db:            NewDBManager(),
-		audioRecorder: recorder.NewAudioRecorder(),
-		audioPlayer:   recorder.NewAudioPlayer(),
+		db:           db,
+		audioRec:     audioRec,
+		audioPlay:    audioPlay,
+		songHandler:  songHandler,
+		trackHandler: trackHandler,
+		albumHandler: albumHandler,
+		audioHandler: audioHandler,
 	}
 }
 
-// startup is called when the app starts.
-// The context is saved so we can call the runtime methods.
+// startup is called by Wails when the application boots up.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	log.Println("App started successfully")
+	log.Println("Kizuna Editor started successfully")
 }
 
-// SaveQuickIdea persists the current editor content to the local database.
-// Returns the ID of the saved song or an error if the operation fails.
-//
-// Exposed to Wails (Frontend).
-func (a *App) SaveQuickIdea(id int, title string, content string) (int64, error) {
-	// 1. Basic Validation
-	if title == "" {
-		title = "Untitled Idea"
-	}
-
-	log.Printf("Saving song: '%s' (Target ID: %d)", title, id)
-
-	// 2. Database Operation
-	// We delegate the logic to the DBManager.
-	// Note: If id is 0, the DBManager should interpret it as a CREATE operation.
-	savedID, err := a.db.SaveQuickIdea(id, title, content)
-	if err != nil {
-		return 0, err
-	}
-
-	// In the future, if DBManager returns an error, we should return it here
-	// like: return 0, fmt.Errorf("database error")
-
-	return savedID, nil
-}
-
-// GetSong retrieves a song by its ID from the database.
-// Exposed to Wails (Frontend).
-func (a *App) GetSong(id int) (*models.Song, error) {
-	return a.db.GetSong(id)
-}
-
-// AddTrack creates a new track for a given song.
-// Exposed to Wails (Frontend).
-func (a *App) AddTrack(songID int, trackName string) (*models.Track, error) {
-	log.Printf("Adding new track '%s' to song ID %d", trackName, songID)
-	return a.db.AddTrack(songID, trackName)
-}
-
-// DeleteTrack removes a track from the database.
-// Exposed to Wails (Frontend).
-func (a *App) DeleteTrack(trackID int) error {
-	log.Printf("Deleting track ID %d", trackID)
-	return a.db.DeleteTrack(trackID)
-}
-
-// UpdateTrack updates the details of an existing track.
-// Exposed to Wails (Frontend).
-func (a *App) UpdateTrack(track *models.Track) error {
-	if track == nil {
-		log.Println("UpdateTrack called with nil track")
-		return nil // Or return an error
-	}
-	log.Printf("Updating track ID %d with name '%s'", track.ID, track.Name)
-	return a.db.UpdateTrack(track)
-}
-
-// GetInstruments retrieves all available instruments from the database.
-// Exposed to Wails (Frontend).
-func (a *App) GetInstruments() ([]models.Instrument, error) {
-	return a.db.GetInstruments()
-}
-
-// SaveSong saves the entire song object, including all its tracks.
-// This is the new primary save method.
-// Exposed to Wails (Frontend).
-func (a *App) SaveSong(song *models.Song) (*models.Song, error) {
-	if song == nil {
-		log.Println("SaveSong called with a nil song object.")
-		// Or return an error: return nil, errors.New("cannot save a nil song")
-		return nil, nil
-	}
-	log.Printf("Saving full song object for '%s' (ID: %d)", song.Title, song.ID)
-	return a.db.SaveSong(song)
-}
-
-// Gets all recent songs from the database.
-// Exposed to Wails (Frontend).
-func (a *App) GetRecentSongs() ([]models.Song, error) {
-	return a.db.GetRecentSongs()
-}
-
-// shutdown is called when the app is shutting down.
-// It attempts to close the DB connection cleanly. Wails will call this if
-// you set OnShutdown to this method in main.
+// shutdown is called by Wails when the app is terminating to release resources cleanly.
 func (a *App) shutdown(ctx context.Context) {
 	if a.db != nil {
 		if err := a.db.Close(); err != nil {
-			log.Println("Error closing DB during shutdown:", err)
+			log.Println("Error closing database during shutdown:", err)
 		}
 	}
-	recorder.TeardownSharedContext()
-	log.Println("App shutdown complete")
+	audio.TeardownSharedContext()
+	log.Println("Kizuna Editor shutdown complete")
 }
+
+// Handler accessors for modular Wails binding
+func (a *App) SongHandler() *bindings.SongHandler   { return a.songHandler }
+func (a *App) TrackHandler() *bindings.TrackHandler { return a.trackHandler }
+func (a *App) AlbumHandler() *bindings.AlbumHandler { return a.albumHandler }
+func (a *App) AudioHandler() *bindings.AudioHandler { return a.audioHandler }
+
+// --- Song Operations (Delegated to SongHandler) ---
+
+// SaveQuickIdea persists the current editor content to the local database.
+func (a *App) SaveQuickIdea(id int, title string, content string) (int64, error) {
+	return a.songHandler.SaveQuickIdea(id, title, content)
+}
+
+// GetSong retrieves a song by its ID.
+func (a *App) GetSong(id int) (*models.Song, error) {
+	return a.songHandler.GetSong(id)
+}
+
+// SaveSong saves the entire song object, including all its tracks.
+func (a *App) SaveSong(song *models.Song) (*models.Song, error) {
+	return a.songHandler.SaveSong(song)
+}
+
+// GetRecentSongs returns recent songs from the database.
+func (a *App) GetRecentSongs() ([]models.Song, error) {
+	return a.songHandler.GetRecentSongs()
+}
+
+// --- Track Operations (Delegated to TrackHandler) ---
+
+// AddTrack creates a new track for a given song.
+func (a *App) AddTrack(songID int, trackName string) (*models.Track, error) {
+	return a.trackHandler.AddTrack(songID, trackName)
+}
+
+// DeleteTrack removes a track by ID.
+func (a *App) DeleteTrack(trackID int) error {
+	return a.trackHandler.DeleteTrack(trackID)
+}
+
+// UpdateTrack updates track details.
+func (a *App) UpdateTrack(track *models.Track) error {
+	return a.trackHandler.UpdateTrack(track)
+}
+
+// GetInstruments retrieves all catalog instruments.
+func (a *App) GetInstruments() ([]models.Instrument, error) {
+	return a.trackHandler.GetInstruments()
+}
+
+// --- Audio Capture & Playback Operations (Delegated to AudioHandler) ---
 
 // StartRecording starts capturing audio from the designated input device.
-// Exposed to Wails (Frontend).
 func (a *App) StartRecording(songID int, trackName string, deviceID string) error {
-	log.Printf("StartRecording called for Song ID: %d, Track Name: '%s', Device ID: %s", songID, trackName, deviceID)
-	if a.audioRecorder == nil {
-		return fmt.Errorf("audio recorder is not initialized")
-	}
-	return a.audioRecorder.StartRecording(songID, trackName, deviceID)
+	return a.audioHandler.StartRecording(songID, trackName, deviceID)
 }
 
-// StopRecording stops active audio capture, saves the PCM data directly to disk as a WAV file,
-// registers the take as an AudioVersion (tied to trackID if > 0, otherwise global), and returns the new take struct.
-// Exposed to Wails (Frontend).
+// StopRecording stops capture, saves WAV to disk, and registers the take in the database.
 func (a *App) StopRecording(trackID int) (*models.AudioVersion, error) {
-	log.Printf("StopRecording called with Target Track ID: %d", trackID)
-	if a.audioRecorder == nil {
-		return nil, fmt.Errorf("audio recorder is not initialized")
-	}
-
-	// 1. Get state before stopping
-	songID := a.audioRecorder.SongID
-	trackName := a.audioRecorder.TrackName
-
-	// 2. Stop hardware capture and retrieve PCM frames
-	pcmData, sampleRate, channels, bitsPerSample, err := a.audioRecorder.StopRecording()
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. Resolve absolute project WAV path
-	wavPath, err := a.getProjectAudioPath(songID, trackName, trackID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve audio path: %w", err)
-	}
-
-	// 4. Save raw PCM bytes directly to disk in WAV format
-	log.Printf("Saving audio file to: %s", wavPath)
-	if err := recorder.WriteWavFile(wavPath, pcmData, sampleRate, channels, bitsPerSample); err != nil {
-		return nil, fmt.Errorf("failed to save WAV file to disk: %w", err)
-	}
-
-	// 5. Register the take inside SQLite 'audio_versions' table
-	var dbTrackID *int
-	var versionName string
-	if trackID > 0 {
-		dbTrackID = &trackID
-		versionName = fmt.Sprintf("Take: %s", trackName)
-	} else {
-		dbTrackID = nil
-		versionName = fmt.Sprintf("Global take: %s", trackName)
-	}
-
-	log.Printf("Registering AudioVersion '%s' in database (Track ID pointer: %v)...", versionName, dbTrackID)
-	av, err := a.db.AddAudioVersion(songID, dbTrackID, versionName, wavPath, "Native Go recorded take")
-	if err != nil {
-		return nil, fmt.Errorf("failed to save audio version to database: %w", err)
-	}
-
-	log.Printf("Audio version successfully recorded and registered: ID %d", av.ID)
-	return av, nil
+	return a.audioHandler.StopRecording(trackID)
 }
 
-// GetAudioLevels retrieves the current real-time normalized audio peak amplitude [0.0, 1.0].
-// Exposed to Wails (Frontend).
+// GetAudioLevels returns the current real-time normalized audio peak amplitude [0.0, 1.0].
 func (a *App) GetAudioLevels() float64 {
-	if a.audioRecorder == nil {
-		return 0.0
-	}
-	return a.audioRecorder.GetAudioLevels()
+	return a.audioHandler.GetAudioLevels()
 }
 
-// GetInputDevices queries malgo to list all available physical microphone/capture devices.
-// Exposed to Wails (Frontend).
-func (a *App) GetInputDevices() ([]recorder.AudioDevice, error) {
-	return recorder.GetInputDevices()
+// GetInputDevices queries all available physical capture devices.
+func (a *App) GetInputDevices() ([]audio.AudioDevice, error) {
+	return a.audioHandler.GetInputDevices()
 }
 
-// GetAvailableDrivers returns the list of audio driver backends supported by the active host OS.
-// Exposed to Wails (Frontend).
+// GetAvailableDrivers returns the list of audio driver backends for the current OS.
 func (a *App) GetAvailableDrivers() []string {
-	return recorder.GetAvailableDrivers()
+	return a.audioHandler.GetAvailableDrivers()
 }
 
-// GetCurrentDriver returns the name of the currently active audio driver backend.
-// Exposed to Wails (Frontend).
+// GetCurrentDriver returns the name of the active audio driver backend.
 func (a *App) GetCurrentDriver() string {
-	return recorder.GetCurrentDriver()
+	return a.audioHandler.GetCurrentDriver()
 }
 
-// SetAudioDriver updates the active audio backend in Go and reinitializes the shared context.
-// Exposed to Wails (Frontend).
+// SetAudioDriver updates the active audio driver backend.
 func (a *App) SetAudioDriver(driverName string) error {
-	log.Printf("SetAudioDriver called: transitioning to driver '%s'", driverName)
-	return recorder.SetAudioDriver(driverName)
+	return a.audioHandler.SetAudioDriver(driverName)
 }
 
-// PlayAudio loads the WAV audio file and starts native CGO playback.
-// Exposed to Wails (Frontend).
+// PlayAudio loads the WAV file and starts playback.
 func (a *App) PlayAudio(filePath string) error {
-	log.Printf("PlayAudio called for file: %s", filePath)
-	if a.audioPlayer == nil {
-		return fmt.Errorf("audio player is not initialized")
-	}
-	return a.audioPlayer.Play(filePath)
+	return a.audioHandler.PlayAudio(filePath)
 }
 
-// PauseAudio pauses or resumes the active audio playback.
-// Exposed to Wails (Frontend).
+// PauseAudio pauses or resumes active audio playback.
 func (a *App) PauseAudio() error {
-	log.Println("PauseAudio called")
-	if a.audioPlayer == nil {
-		return fmt.Errorf("audio player is not initialized")
-	}
-	return a.audioPlayer.Pause()
+	return a.audioHandler.PauseAudio()
 }
 
-// SeekAudio shifts the playback progress to the designated timestamp in seconds.
-// Exposed to Wails (Frontend).
+// SeekAudio shifts playback progress to the given second offset.
 func (a *App) SeekAudio(seconds float64) error {
-	log.Printf("SeekAudio called for offset: %.2fs", seconds)
-	if a.audioPlayer == nil {
-		return fmt.Errorf("audio player is not initialized")
-	}
-	return a.audioPlayer.Seek(seconds)
+	return a.audioHandler.SeekAudio(seconds)
 }
 
-// SetAudioVolume updates the real-time gain multiplier in Go in the range [0.0, 1.0].
-// Exposed to Wails (Frontend).
+// SetAudioVolume updates playback volume in range [0.0, 1.0].
 func (a *App) SetAudioVolume(volume float64) error {
-	if a.audioPlayer == nil {
-		return fmt.Errorf("audio player is not initialized")
-	}
-	return a.audioPlayer.SetVolume(volume)
+	return a.audioHandler.SetAudioVolume(volume)
 }
 
-// GetPlaybackPosition returns the current playback progress in seconds.
-// Exposed to Wails (Frontend).
+// GetPlaybackPosition returns current playback progress in seconds.
 func (a *App) GetPlaybackPosition() float64 {
-	if a.audioPlayer == nil {
-		return 0.0
-	}
-	return a.audioPlayer.GetPosition()
+	return a.audioHandler.GetPlaybackPosition()
 }
 
-// GetPlaybackDuration returns the total duration of the currently loaded WAV in seconds.
-// Exposed to Wails (Frontend).
+// GetPlaybackDuration returns total duration of loaded WAV in seconds.
 func (a *App) GetPlaybackDuration() float64 {
-	if a.audioPlayer == nil {
-		return 0.0
-	}
-	return a.audioPlayer.GetDuration()
+	return a.audioHandler.GetPlaybackDuration()
 }
 
-// GetAudioVersionsForTrack retrieves all audio versions associated with a specific track.
-// Exposed to Wails (Frontend).
+// GetAudioVersionsForTrack retrieves all audio takes associated with a track.
 func (a *App) GetAudioVersionsForTrack(trackID int) ([]models.AudioVersion, error) {
-	return a.db.GetAudioVersionsForTrack(trackID)
+	return a.audioHandler.GetAudioVersionsForTrack(trackID)
 }
 
-// GetAudioVersionsForSong retrieves all audio versions for a song, including those that are global (track_id IS NULL).
-// Exposed to Wails (Frontend).
+// GetAudioVersionsForSong retrieves all audio takes for a song.
 func (a *App) GetAudioVersionsForSong(songID int) ([]models.AudioVersion, error) {
-	return a.db.GetAudioVersionsForSong(songID)
+	return a.audioHandler.GetAudioVersionsForSong(songID)
 }
 
-// getProjectAudioPath determines the absolute OS-appropriate project path to save the .wav file.
-func (a *App) getProjectAudioPath(songID int, trackName string, trackID int) (string, error) {
-	safeTrackName := cleanFileName(trackName)
-	timestamp := time.Now().Format("20060102_150405")
-	
-	var filename string
-	if trackID > 0 {
-		filename = fmt.Sprintf("track_%d_%s_%s.wav", trackID, safeTrackName, timestamp)
-	} else {
-		filename = fmt.Sprintf("global_%s_%s.wav", safeTrackName, timestamp)
-	}
+// --- Album Operations (Delegated to AlbumHandler - Issues #6, #7, #8, #17, #18) ---
 
-	switch runtime.GOOS {
-	case "windows":
-		appdata := os.Getenv("APPDATA")
-		if appdata == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", err
-			}
-			appdata = filepath.Join(home, "AppData", "Roaming")
-		}
-		return filepath.Join(appdata, "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", filename), nil
-	case "darwin":
-		configDir, err := os.UserConfigDir()
-		if err != nil {
-			home, herr := os.UserHomeDir()
-			if herr != nil {
-				return "", err
-			}
-			configDir = filepath.Join(home, "Library", "Application Support")
-		}
-		return filepath.Join(configDir, "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", filename), nil
-	default:
-		xdg := os.Getenv("XDG_DATA_HOME")
-		if xdg != "" {
-			return filepath.Join(xdg, "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", filename), nil
-		}
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(home, ".local", "share", "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", filename), nil
-	}
+// CreateAlbum creates a new empty album (Issue #6).
+func (a *App) CreateAlbum(title, artist, description string) (*models.Album, error) {
+	return a.albumHandler.CreateAlbum(title, artist, description)
 }
 
-// cleanFileName removes characters that are illegal or unsafe for filenames.
-func cleanFileName(name string) string {
-	// Simple sanitize logic: replace illegal filename characters with underscores
-	var result []rune
-	for _, r := range name {
-		if r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
-			result = append(result, '_')
-		} else {
-			result = append(result, r)
-		}
-	}
-	cleaned := string(result)
-	if cleaned == "" {
-		cleaned = "recorded_track"
-	}
-	return cleaned
+// GetAlbum retrieves an album by ID (Issue #8).
+func (a *App) GetAlbum(id int) (*models.Album, error) {
+	return a.albumHandler.GetAlbum(id)
+}
+
+// ListAlbums lists all albums in the library (Issue #8).
+func (a *App) ListAlbums() ([]models.Album, error) {
+	return a.albumHandler.ListAlbums()
+}
+
+// UpdateAlbum updates an album's metadata (Issue #18).
+func (a *App) UpdateAlbum(album *models.Album) error {
+	return a.albumHandler.UpdateAlbum(album)
+}
+
+// DeleteAlbum deletes an album (Issue #18).
+func (a *App) DeleteAlbum(id int) error {
+	return a.albumHandler.DeleteAlbum(id)
+}
+
+// AssignSongToAlbum assigns a song to an album (Issue #7).
+func (a *App) AssignSongToAlbum(songID int, albumID int) error {
+	return a.albumHandler.AssignSongToAlbum(songID, albumID)
+}
+
+// RemoveSongFromAlbum removes a song from its album (Issue #17).
+func (a *App) RemoveSongFromAlbum(songID int) error {
+	return a.albumHandler.RemoveSongFromAlbum(songID)
+}
+
+// GetAlbumSongs retrieves all songs in an album (Issue #8).
+func (a *App) GetAlbumSongs(albumID int) ([]models.Song, error) {
+	return a.albumHandler.GetAlbumSongs(albumID)
 }
