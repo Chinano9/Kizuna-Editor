@@ -35,12 +35,12 @@
 
     import "../styles/editor-theme.css";
 
-    import type { main } from "../../../wailsjs/go/models";
+    import type { Track } from "@shared/types/wails";
 
     import Toolbar from "./Toolbar.svelte";
 
     // This component now recibe el objeto completo de track.
-    export let track: main.Track;
+    export let track: Track;
 </script>
 
 <div class="editor-container">

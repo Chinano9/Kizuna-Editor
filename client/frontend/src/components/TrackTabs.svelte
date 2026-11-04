@@ -23,7 +23,7 @@
 
     import { song } from "@/stores/projectStore";
 
-    import type { main } from "../../wailsjs/go/models";
+    import type { Instrument, Track } from "@shared/types/wails";
 
     import {
         AddTrack,
@@ -38,7 +38,7 @@
 
     let inputElement: HTMLInputElement;
 
-    let instruments: main.Instrument[] = [];
+    let instruments: Instrument[] = [];
 
     onMount(async () => {
         try {
@@ -99,7 +99,7 @@
     }
 
     async function saveTrackName() {
-        if (editingIndex === null) return;
+        if (editingIndex === null || !$song || !$song.tracks) return;
 
         const trackToUpdate = $song.tracks[editingIndex];
 
@@ -130,8 +130,10 @@
 
     async function deleteTrack(index: number) {
         if (!confirm("Are you sure you want to delete this track?")) return;
+        if (!$song || !$song.tracks) return;
 
         const trackToDelete = $song.tracks[index];
+        if (!trackToDelete) return;
 
         try {
             await DeleteTrack(trackToDelete.id);
@@ -152,7 +154,7 @@
         }
     }
 
-    async function handleInstrumentChange(track: main.Track) {
+    async function handleInstrumentChange(track: Track) {
         try {
             await UpdateTrack(track);
 

@@ -37,11 +37,11 @@
         GetCurrentDriver,
         SetAudioDriver
     } from "../../wailsjs/go/main/App";
-    import type { main } from "../../wailsjs/go/models";
+    import type { Track, AudioVersion } from "@shared/types/wails";
 
     // Props from layout
     export let songID: number;
-    export let activeTrack: main.Track | null;
+    export let activeTrack: Track | null;
 
     // --- State Machine ---
     let isRecording = false;
@@ -77,7 +77,7 @@
     let playbackDuration = 0.0;
     let playbackIntervalId: any = null;
     
-    let takes: main.AudioVersion[] = [];
+    let takes: AudioVersion[] = [];
     let selectedTakePath = "";
 
     // Equalizer: 12 bars with phase offsets

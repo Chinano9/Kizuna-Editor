@@ -11,6 +11,10 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
+      "@app/*": ["src/app/*"],
+      "@shared/*": ["src/shared/*"],
+      "@features/*": ["src/features/*"],
+      "@wails/*": ["wailsjs/*"],
       "wailsjs/*": ["./wailsjs/*"]
     }
   },
@@ -22,5 +26,5 @@
     "wailsjs/**/*.js",
     "wailsjs/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "dist"]
 }
