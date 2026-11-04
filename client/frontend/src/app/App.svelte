@@ -9,6 +9,7 @@
     import Dashboard from "@/components/Dashboard.svelte";
     import DashboardLayout from "@/layouts/DashboardLayout.svelte";
     import EditorLayout from "@/layouts/EditorLayout.svelte";
+    import ToastContainer from "@shared/components/feedback/ToastContainer.svelte";
     import "@shared/styles/global.css";
 
     // Load global metadata on startup
@@ -25,6 +26,8 @@
     {:else}
         <EditorLayout />
     {/if}
+
+    <ToastContainer />
 </main>
 
 <style>
