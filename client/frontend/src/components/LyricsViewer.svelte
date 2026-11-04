@@ -53,10 +53,10 @@
     }
     
     /* Evitar que contenido ancho (imágenes, tablas, bloques de código) genere scroll horizontal */
-    .lyrics-container img,
-    .lyrics-container table,
-    .lyrics-container pre,
-    .lyrics-container code {
+    .lyrics-container :global(img),
+    .lyrics-container :global(table),
+    .lyrics-container :global(pre),
+    .lyrics-container :global(code) {
         max-width: 100%;
         box-sizing: border-box;
     }

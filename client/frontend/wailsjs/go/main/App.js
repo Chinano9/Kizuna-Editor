@@ -6,8 +6,36 @@ export function AddTrack(arg1, arg2) {
   return window['go']['main']['App']['AddTrack'](arg1, arg2);
 }
 
+export function AlbumHandler() {
+  return window['go']['main']['App']['AlbumHandler']();
+}
+
+export function AssignSongToAlbum(arg1, arg2) {
+  return window['go']['main']['App']['AssignSongToAlbum'](arg1, arg2);
+}
+
+export function AudioHandler() {
+  return window['go']['main']['App']['AudioHandler']();
+}
+
+export function CreateAlbum(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CreateAlbum'](arg1, arg2, arg3);
+}
+
+export function DeleteAlbum(arg1) {
+  return window['go']['main']['App']['DeleteAlbum'](arg1);
+}
+
 export function DeleteTrack(arg1) {
   return window['go']['main']['App']['DeleteTrack'](arg1);
+}
+
+export function GetAlbum(arg1) {
+  return window['go']['main']['App']['GetAlbum'](arg1);
+}
+
+export function GetAlbumSongs(arg1) {
+  return window['go']['main']['App']['GetAlbumSongs'](arg1);
 }
 
 export function GetAudioLevels() {
@@ -54,12 +82,20 @@ export function GetSong(arg1) {
   return window['go']['main']['App']['GetSong'](arg1);
 }
 
+export function ListAlbums() {
+  return window['go']['main']['App']['ListAlbums']();
+}
+
 export function PauseAudio() {
   return window['go']['main']['App']['PauseAudio']();
 }
 
 export function PlayAudio(arg1) {
   return window['go']['main']['App']['PlayAudio'](arg1);
+}
+
+export function RemoveSongFromAlbum(arg1) {
+  return window['go']['main']['App']['RemoveSongFromAlbum'](arg1);
 }
 
 export function SaveQuickIdea(arg1, arg2, arg3) {
@@ -82,12 +118,24 @@ export function SetAudioVolume(arg1) {
   return window['go']['main']['App']['SetAudioVolume'](arg1);
 }
 
+export function SongHandler() {
+  return window['go']['main']['App']['SongHandler']();
+}
+
 export function StartRecording(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartRecording'](arg1, arg2, arg3);
 }
 
 export function StopRecording(arg1) {
   return window['go']['main']['App']['StopRecording'](arg1);
+}
+
+export function TrackHandler() {
+  return window['go']['main']['App']['TrackHandler']();
+}
+
+export function UpdateAlbum(arg1) {
+  return window['go']['main']['App']['UpdateAlbum'](arg1);
 }
 
 export function UpdateTrack(arg1) {

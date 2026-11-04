@@ -10,6 +10,7 @@
     import { songId, song } from "@/stores/projectStore";
     import { currentView } from "@/stores/viewStore";
     import { activeTrackIndex } from "@/stores/trackStore";
+    import { toastStore } from "@shared/stores/toastStore";
     import { Track, Song } from "@shared/types/wails";
 
     let activeTrack: Track | null = null;
@@ -54,7 +55,7 @@
             activeTrackIndex.set(0);
         } catch (err) {
             console.error("Error fetching song:", err);
-            alert("Failed to load the song.");
+            toastStore.error("Failed to load the song.");
         }
     }
 
