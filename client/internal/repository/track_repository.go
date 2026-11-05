@@ -114,7 +114,7 @@ func (r *SQLiteTrackRepository) GetBySongID(ctx context.Context, songID int) ([]
 	}
 	defer rows.Close()
 
-	var tracks []models.Track
+	tracks := make([]models.Track, 0)
 	for rows.Next() {
 		var t models.Track
 		if err := rows.Scan(&t.ID, &t.SongID, &t.InstrumentID, &t.Name, &t.DataContent, &t.DisplayMode, &t.IsMuted, &t.CreatedAt); err != nil {

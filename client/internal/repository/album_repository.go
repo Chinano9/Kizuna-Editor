@@ -102,7 +102,7 @@ func (r *SQLiteAlbumRepository) GetAll(ctx context.Context) ([]models.Album, err
 	}
 	defer rows.Close()
 
-	var albums []models.Album
+	albums := make([]models.Album, 0)
 	for rows.Next() {
 		var a models.Album
 		var artist, desc sql.NullString

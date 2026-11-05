@@ -41,9 +41,10 @@
 
     onMount(async () => {
         try {
-            instruments = await GetInstruments();
+            instruments = (await GetInstruments()) ?? [];
         } catch (err) {
             console.error("Failed to load instruments:", err);
+            instruments = [];
         }
     });
 
