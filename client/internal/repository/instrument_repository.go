@@ -51,7 +51,7 @@ func (r *SQLiteInstrumentRepository) GetAll(ctx context.Context) ([]models.Instr
 	}
 	defer rows.Close()
 
-	var instruments []models.Instrument
+	instruments := make([]models.Instrument, 0)
 	for rows.Next() {
 		var i models.Instrument
 		if err := rows.Scan(&i.ID, &i.Name, &i.Type, &i.DefaultClef); err != nil {

@@ -129,7 +129,7 @@ func (r *SQLiteSongRepository) GetRecent(ctx context.Context, limit int) ([]mode
 	}
 	defer rows.Close()
 
-	var songs []models.Song
+	songs := make([]models.Song, 0)
 	for rows.Next() {
 		var s models.Song
 		if err := rows.Scan(&s.ID, &s.Title, &s.UpdatedAt); err != nil {
@@ -152,7 +152,7 @@ func (r *SQLiteSongRepository) GetByAlbumID(ctx context.Context, albumID int) ([
 	}
 	defer rows.Close()
 
-	var songs []models.Song
+	songs := make([]models.Song, 0)
 	for rows.Next() {
 		var s models.Song
 		var ts, ks sql.NullString

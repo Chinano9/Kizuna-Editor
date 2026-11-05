@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"kizuna/client/internal/database"
 	"kizuna/client/internal/database/migrator"
 	"kizuna/shared/models"
@@ -194,6 +195,77 @@ func TestRepositories(t *testing.T) {
 		}
 		if len(takes) != 1 {
 			t.Errorf("expected 1 take, got %d", len(takes))
+		}
+	})
+
+	t.Run("Empty Query Non-Nil Slice and JSON Array Marshalling", func(t *testing.T) {
+		// Verify fresh DB without songs produces non-nil empty slices that serialize to "[]"
+		freshDB, err := database.Open(database.DefaultConfig(":memory:"))
+		if err != nil {
+			t.Fatalf("failed to open in-memory db: %v", err)
+		}
+		defer freshDB.Close()
+
+		m := migrator.NewMigrator(freshDB)
+		if err := m.Migrate(); err != nil {
+			t.Fatalf("failed to run migrations: %v", err)
+		}
+
+		freshSongRepo := NewSongRepository(freshDB)
+		freshAlbumRepo := NewAlbumRepository(freshDB)
+		freshTrackRepo := NewTrackRepository(freshDB)
+		freshAudioRepo := NewAudioRepository(freshDB)
+
+		// 1. GetRecent on empty songs table
+		recentSongs, err := freshSongRepo.GetRecent(ctx, 10)
+		if err != nil {
+			t.Fatalf("unexpected error querying recent songs on empty DB: %v", err)
+		}
+		if recentSongs == nil {
+			t.Fatalf("expected non-nil slice from GetRecent on empty DB, got nil")
+		}
+		songBytes, err := json.Marshal(recentSongs)
+		if err != nil {
+			t.Fatalf("failed to marshal empty songs slice: %v", err)
+		}
+		if string(songBytes) != "[]" {
+			t.Fatalf("expected JSON '[]' for empty songs, got '%s'", string(songBytes))
+		}
+
+		// 2. GetByAlbumID on empty songs table
+		albumSongs, err := freshSongRepo.GetByAlbumID(ctx, 999)
+		if err != nil || albumSongs == nil {
+			t.Fatalf("expected non-nil slice for empty album songs, got err=%v, res=%v", err, albumSongs)
+		}
+		if b, _ := json.Marshal(albumSongs); string(b) != "[]" {
+			t.Fatalf("expected JSON '[]', got '%s'", string(b))
+		}
+
+		// 3. GetAll on empty albums table
+		emptyAlbums, err := freshAlbumRepo.GetAll(ctx)
+		if err != nil || emptyAlbums == nil {
+			t.Fatalf("expected non-nil slice for empty albums, got err=%v, res=%v", err, emptyAlbums)
+		}
+		if b, _ := json.Marshal(emptyAlbums); string(b) != "[]" {
+			t.Fatalf("expected JSON '[]', got '%s'", string(b))
+		}
+
+		// 4. GetBySongID on empty tracks table
+		emptyTracks, err := freshTrackRepo.GetBySongID(ctx, 999)
+		if err != nil || emptyTracks == nil {
+			t.Fatalf("expected non-nil slice for empty tracks, got err=%v, res=%v", err, emptyTracks)
+		}
+		if b, _ := json.Marshal(emptyTracks); string(b) != "[]" {
+			t.Fatalf("expected JSON '[]', got '%s'", string(b))
+		}
+
+		// 5. GetBySongID on empty audio_versions table
+		emptyAudio, err := freshAudioRepo.GetBySongID(ctx, 999)
+		if err != nil || emptyAudio == nil {
+			t.Fatalf("expected non-nil slice for empty audio takes, got err=%v, res=%v", err, emptyAudio)
+		}
+		if b, _ := json.Marshal(emptyAudio); string(b) != "[]" {
+			t.Fatalf("expected JSON '[]', got '%s'", string(b))
 		}
 	})
 }

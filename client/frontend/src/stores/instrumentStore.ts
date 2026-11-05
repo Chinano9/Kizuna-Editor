@@ -12,12 +12,12 @@ async function loadInstruments() {
   if (instrumentsLoaded) return;
 
   try {
-    const instruments = await GetInstruments();
-    set(instruments);
+    const instruments = (await GetInstruments()) ?? [];
+    set(instruments || []);
     instrumentsLoaded = true;
   } catch (err) {
     console.error("Failed to load instruments:", err);
-    // Keep the store as an empty array on error
+    set([]);
   }
 }
 
@@ -27,7 +27,7 @@ export const instrumentStore = {
   load: loadInstruments,
   // Helper function to get an instrument name by its ID
   getNameById: (id: number): string => {
-    const instruments = get({ subscribe });
+    const instruments = get({ subscribe }) || [];
     const instrument = instruments.find((inst) => inst.id === id);
     return instrument ? instrument.name : "Unknown";
   },

@@ -23,25 +23,24 @@
 
     import type { models } from "wailsjs/go/models";
 
-    import { songId } from "../stores/projectStore";
-
+    import { songId, activeSongStore } from "../stores/projectStore";
+    import { activeTrackIndex } from "@/stores/trackStore";
     import { currentView } from "../stores/viewStore";
 
     let recentSongs: models.Song[] = [];
 
     onMount(async () => {
         try {
-            recentSongs = await GetRecentSongs();
+            recentSongs = (await GetRecentSongs()) ?? [];
         } catch (err) {
             console.error("Failed to load recent songs:", err);
+            recentSongs = [];
         }
     });
 
     function newSong() {
-        // Setting songId to 0 signals the editor to create a new song
-
-        songId.set(0);
-
+        activeSongStore.createNewSong();
+        activeTrackIndex.set(0);
         currentView.set("editor");
     }
 
@@ -66,7 +65,7 @@
     <section class="recent-work">
         <h2>Recent Work</h2>
 
-        {#if recentSongs.length === 0}
+        {#if !recentSongs || recentSongs.length === 0}
             <p>No recent songs found. Start a new idea!</p>
         {:else}
             <div class="grid">

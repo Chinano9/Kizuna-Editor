@@ -108,7 +108,7 @@ func (r *SQLiteAudioRepository) GetBySongID(ctx context.Context, songID int) ([]
 	}
 	defer rows.Close()
 
-	var versions []models.AudioVersion
+	versions := make([]models.AudioVersion, 0)
 	for rows.Next() {
 		var av models.AudioVersion
 		var trackIDNull sql.NullInt64
@@ -139,7 +139,7 @@ func (r *SQLiteAudioRepository) GetByTrackID(ctx context.Context, trackID int) (
 	}
 	defer rows.Close()
 
-	var versions []models.AudioVersion
+	versions := make([]models.AudioVersion, 0)
 	for rows.Next() {
 		var av models.AudioVersion
 		var trackIDNull sql.NullInt64

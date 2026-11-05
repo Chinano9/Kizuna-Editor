@@ -7,7 +7,7 @@
     import TrackTabs from "@/components/TrackTabs.svelte";
     import Workbar from "@/components/Workbar.svelte";
 
-    import { songId, song } from "@/stores/projectStore";
+    import { songId, song, activeSongStore } from "@/stores/projectStore";
     import { currentView } from "@/stores/viewStore";
     import { activeTrackIndex } from "@/stores/trackStore";
     import { toastStore } from "@shared/stores/toastStore";
@@ -22,28 +22,10 @@
 
     async function loadSong(id: number) {
         if (id === 0) {
-            // Create a default structure for a new song
-            const newTrack = new Track({
-                id: 0,
-                song_id: 0,
-                instrument_id: 1, // Default to guitar
-                name: "Track 1",
-                data_content: '\\title "New Song"\\n.',
-                display_mode: "BOTH",
-                is_muted: false,
-                created_at: new Date().toISOString(),
-            });
-            const newSong = new Song({
-                id: 0,
-                title: "My New Idea",
-                tracks: [newTrack],
-                bpm: 120,
-                time_signature: "4/4",
-                key_signature: "",
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-            });
-            song.set(newSong);
+            // If the store is not already initialized, create default structure
+            if (!$song || !$song.tracks || $song.tracks.length === 0) {
+                activeSongStore.createNewSong();
+            }
             activeTrackIndex.set(0);
             return;
         }
@@ -51,8 +33,10 @@
         try {
             console.log("Loading full content for ID:", id);
             const songData = await GetSong(id);
-            song.set(songData);
-            activeTrackIndex.set(0);
+            if (songData) {
+                song.set(songData);
+                activeTrackIndex.set(0);
+            }
         } catch (err) {
             console.error("Error fetching song:", err);
             toastStore.error("Failed to load the song.");
