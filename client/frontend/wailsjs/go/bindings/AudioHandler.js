@@ -54,8 +54,16 @@ export function SetAudioVolume(arg1) {
   return window['go']['bindings']['AudioHandler']['SetAudioVolume'](arg1);
 }
 
+export function StartQuickIdeaRecording(arg1) {
+  return window['go']['bindings']['AudioHandler']['StartQuickIdeaRecording'](arg1);
+}
+
 export function StartRecording(arg1, arg2, arg3) {
   return window['go']['bindings']['AudioHandler']['StartRecording'](arg1, arg2, arg3);
+}
+
+export function StopQuickIdeaRecording() {
+  return window['go']['bindings']['AudioHandler']['StopQuickIdeaRecording']();
 }
 
 export function StopRecording(arg1) {

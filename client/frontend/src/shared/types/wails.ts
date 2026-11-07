@@ -31,6 +31,9 @@ export type Instrument = WailsModels.Instrument;
 export const AudioVersion = WailsModels.AudioVersion;
 export type AudioVersion = WailsModels.AudioVersion;
 
+export const QuickIdea = WailsModels.QuickIdea;
+export type QuickIdea = WailsModels.QuickIdea;
+
 export const AudioDevice = WailsAudio.AudioDevice;
 export type AudioDevice = WailsAudio.AudioDevice;
 
@@ -39,4 +42,5 @@ export const SongModel = WailsModels.Song;
 export const TrackModel = WailsModels.Track;
 export const InstrumentModel = WailsModels.Instrument;
 export const AudioVersionModel = WailsModels.AudioVersion;
+export const QuickIdeaModel = WailsModels.QuickIdea;
 export const AudioDeviceModel = WailsAudio.AudioDevice;

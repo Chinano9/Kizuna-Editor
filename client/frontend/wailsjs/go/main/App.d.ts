@@ -64,7 +64,11 @@ export function SetAudioVolume(arg1:number):Promise<void>;
 
 export function SongHandler():Promise<bindings.SongHandler>;
 
+export function StartQuickIdeaRecording(arg1:string):Promise<void>;
+
 export function StartRecording(arg1:number,arg2:string,arg3:string):Promise<void>;
+
+export function StopQuickIdeaRecording():Promise<models.QuickIdea>;
 
 export function StopRecording(arg1:number):Promise<models.AudioVersion>;
 

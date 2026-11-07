@@ -122,8 +122,16 @@ export function SongHandler() {
   return window['go']['main']['App']['SongHandler']();
 }
 
+export function StartQuickIdeaRecording(arg1) {
+  return window['go']['main']['App']['StartQuickIdeaRecording'](arg1);
+}
+
 export function StartRecording(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartRecording'](arg1, arg2, arg3);
+}
+
+export function StopQuickIdeaRecording() {
+  return window['go']['main']['App']['StopQuickIdeaRecording']();
 }
 
 export function StopRecording(arg1) {
