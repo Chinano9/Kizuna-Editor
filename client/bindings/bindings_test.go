@@ -28,12 +28,14 @@ func setupTestBindings(t *testing.T) (*SongHandler, *TrackHandler, *AlbumHandler
 	trackRepo := repository.NewTrackRepository(db)
 	albumRepo := repository.NewAlbumRepository(db)
 	audioRepo := repository.NewAudioRepository(db)
+	quickIdeaRepo := repository.NewQuickIdeaRepository(db)
 	instRepo := repository.NewInstrumentRepository(db)
 
 	songService := service.NewSongService(db, songRepo, trackRepo)
 	trackService := service.NewTrackService(trackRepo)
 	albumService := service.NewAlbumService(albumRepo, songRepo)
 	audioService := service.NewAudioService(audioRepo)
+	quickIdeaService := service.NewQuickIdeaService(quickIdeaRepo)
 
 	audioRec := audio.NewAudioRecorder()
 	audioPlay := audio.NewAudioPlayer()
@@ -41,7 +43,7 @@ func setupTestBindings(t *testing.T) (*SongHandler, *TrackHandler, *AlbumHandler
 	songHandler := NewSongHandler(songService)
 	trackHandler := NewTrackHandler(trackService, instRepo)
 	albumHandler := NewAlbumHandler(albumService)
-	audioHandler := NewAudioHandler(audioRec, audioPlay, audioService)
+	audioHandler := NewAudioHandler(audioRec, audioPlay, audioService, quickIdeaService)
 
 	cleanup := func() {
 		_ = db.Close()

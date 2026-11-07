@@ -34,6 +34,7 @@ type AudioRecorder struct {
 	sync.Mutex
 
 	isRecording  bool
+	isQuickIdea  bool
 	SongID       int
 	TrackName    string
 	capturedData []byte
@@ -46,6 +47,13 @@ type AudioRecorder struct {
 	currentLevel     float64 // normalized [0.0, 1.0]
 }
 
+// RecordingInfo describes the destination associated with an active recording.
+type RecordingInfo struct {
+	SongID    int
+	TrackName string
+	QuickIdea bool
+}
+
 // NewAudioRecorder instantiates and returns a thread-safe AudioRecorder.
 func NewAudioRecorder() *AudioRecorder {
 	return &AudioRecorder{
@@ -55,6 +63,15 @@ func NewAudioRecorder() *AudioRecorder {
 
 // StartRecording initializes capture on the designated hardware device.
 func (r *AudioRecorder) StartRecording(songID int, trackName string, deviceID string) error {
+	return r.startRecording(songID, trackName, deviceID, false)
+}
+
+// StartQuickIdeaRecording initializes capture for an independent quick idea.
+func (r *AudioRecorder) StartQuickIdeaRecording(deviceID string) error {
+	return r.startRecording(0, "Quick Idea", deviceID, true)
+}
+
+func (r *AudioRecorder) startRecording(songID int, trackName string, deviceID string, quickIdea bool) error {
 	r.Lock()
 	if r.isRecording {
 		r.Unlock()
@@ -75,6 +92,7 @@ func (r *AudioRecorder) StartRecording(songID int, trackName string, deviceID st
 
 	r.SongID = songID
 	r.TrackName = trackName
+	r.isQuickIdea = quickIdea
 	r.capturedData = r.capturedData[:0]
 	r.currentLevel = 0.0
 	r.isRecording = true
@@ -84,6 +102,7 @@ func (r *AudioRecorder) StartRecording(songID int, trackName string, deviceID st
 	if err != nil {
 		r.Lock()
 		r.isRecording = false
+		r.isQuickIdea = false
 		r.Unlock()
 		return fmt.Errorf("failed to get shared audio context: %w", err)
 	}
@@ -92,10 +111,10 @@ func (r *AudioRecorder) StartRecording(songID int, trackName string, deviceID st
 		Channels   uint32
 		SampleRate uint32
 	}{
-		{Channels: 0, SampleRate: 0},                                                // Hardware Native Default
+		{Channels: 0, SampleRate: 0}, // Hardware Native Default
 		{Channels: uint32(DefaultChannels), SampleRate: uint32(DefaultSampleRate)}, // Mono 44.1kHz
-		{Channels: 2, SampleRate: 44100},                                            // Stereo 44.1kHz
-		{Channels: 2, SampleRate: 48000},                                            // Stereo 48kHz
+		{Channels: 2, SampleRate: 44100},                                           // Stereo 44.1kHz
+		{Channels: 2, SampleRate: 48000},                                           // Stereo 48kHz
 	}
 
 	var device *malgo.Device
@@ -152,6 +171,7 @@ func (r *AudioRecorder) StartRecording(songID int, trackName string, deviceID st
 	if device == nil {
 		r.Lock()
 		r.isRecording = false
+		r.isQuickIdea = false
 		r.Unlock()
 		return fmt.Errorf("failed to initialize capture device: %w", lastErr)
 	}
@@ -172,6 +192,7 @@ func (r *AudioRecorder) StartRecording(songID int, trackName string, deviceID st
 		r.device = nil
 		r.ctx = nil
 		r.isRecording = false
+		r.isQuickIdea = false
 		r.Unlock()
 		return fmt.Errorf("failed to start audio capture: %w", err)
 	}
@@ -181,13 +202,30 @@ func (r *AudioRecorder) StartRecording(songID int, trackName string, deviceID st
 
 // StopRecording halts audio capture and returns the recorded PCM byte buffer.
 func (r *AudioRecorder) StopRecording() (pcmData []byte, sampleRate, channels, bitsPerSample int, err error) {
+	pcmData, sampleRate, channels, bitsPerSample, _, err = r.StopRecordingWithInfo(nil)
+	return
+}
+
+// StopRecordingWithInfo halts capture and returns the recording's destination metadata.
+// If expectedQuickIdea is non-nil, capture is stopped only when its type matches.
+func (r *AudioRecorder) StopRecordingWithInfo(expectedQuickIdea *bool) (pcmData []byte, sampleRate, channels, bitsPerSample int, info RecordingInfo, err error) {
 	r.Lock()
 	if !r.isRecording {
 		r.Unlock()
-		return nil, 0, 0, 0, fmt.Errorf("audio recorder is not recording")
+		return nil, 0, 0, 0, RecordingInfo{}, fmt.Errorf("audio recorder is not recording")
+	}
+	if expectedQuickIdea != nil && r.isQuickIdea != *expectedQuickIdea {
+		r.Unlock()
+		return nil, 0, 0, 0, RecordingInfo{}, fmt.Errorf("active recording type does not match stop request")
 	}
 
 	r.isRecording = false
+	info = RecordingInfo{
+		SongID:    r.SongID,
+		TrackName: r.TrackName,
+		QuickIdea: r.isQuickIdea,
+	}
+	r.isQuickIdea = false
 	dev := r.device
 	r.device = nil
 	r.ctx = nil
@@ -204,7 +242,7 @@ func (r *AudioRecorder) StopRecording() (pcmData []byte, sampleRate, channels, b
 		dev.Uninit()
 	}
 
-	return pcmOut, openedSR, openedCh, DefaultBitsPerSample, nil
+	return pcmOut, openedSR, openedCh, DefaultBitsPerSample, info, nil
 }
 
 // GetAudioLevels returns the current normalized peak amplitude [0.0, 1.0] with logarithmic release decay.

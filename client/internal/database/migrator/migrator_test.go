@@ -29,20 +29,20 @@ func TestMigrator(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to get current version: %v", err)
 		}
-		if currentVersion < 2 {
-			t.Errorf("expected current version >= 2, got %d", currentVersion)
+		if currentVersion < 3 {
+			t.Errorf("expected current version >= 3, got %d", currentVersion)
 		}
 
 		applied, err := m.GetAppliedMigrations()
 		if err != nil {
 			t.Fatalf("failed to get applied migrations: %v", err)
 		}
-		if len(applied) < 2 {
-			t.Fatalf("expected at least 2 applied migrations, got %d", len(applied))
+		if len(applied) < 3 {
+			t.Fatalf("expected at least 3 applied migrations, got %d", len(applied))
 		}
 
 		// Verify tables were created
-		expectedTables := []string{"albums", "songs", "instruments", "tracks", "audio_versions", "schema_migrations"}
+		expectedTables := []string{"albums", "songs", "instruments", "tracks", "audio_versions", "quick_ideas", "schema_migrations"}
 		for _, table := range expectedTables {
 			var count int
 			err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count)
@@ -52,7 +52,7 @@ func TestMigrator(t *testing.T) {
 		}
 
 		// Verify indexes were created
-		expectedIndexes := []string{"idx_songs_album_id", "idx_songs_updated_at", "idx_tracks_song_id", "idx_audio_versions_track_id"}
+		expectedIndexes := []string{"idx_songs_album_id", "idx_songs_updated_at", "idx_tracks_song_id", "idx_audio_versions_track_id", "idx_quick_ideas_created_at"}
 		for _, idx := range expectedIndexes {
 			var count int
 			err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", idx).Scan(&count)

@@ -141,6 +141,17 @@ func ResolveProjectAudioPath(songID int, trackName string, trackID int) (string,
 	return filepath.Join(baseDir, "Kizuna", "projects", fmt.Sprintf("%d", songID), "audio", filename), nil
 }
 
+// ResolveQuickIdeaAudioPath returns a unique path for an audio idea independent of any project.
+func ResolveQuickIdeaAudioPath() (string, error) {
+	baseDir, err := getAudioBaseDir()
+	if err != nil {
+		return "", err
+	}
+
+	filename := "quick_idea_" + time.Now().UTC().Format("20060102_150405_000000000") + ".wav"
+	return filepath.Join(baseDir, "Kizuna", "ideas", filename), nil
+}
+
 // CleanFileName sanitizes names for filesystem safety by replacing invalid characters with underscores.
 func CleanFileName(name string) string {
 	var result []rune

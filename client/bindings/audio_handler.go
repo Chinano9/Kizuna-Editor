@@ -20,30 +20,42 @@ package bindings
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"kizuna/client/internal/audio"
 	"kizuna/client/internal/service"
 	"kizuna/shared/models"
 	"log"
+	"os"
 )
+
+type recorder interface {
+	StartRecording(songID int, trackName, deviceID string) error
+	StartQuickIdeaRecording(deviceID string) error
+	StopRecordingWithInfo(expectedQuickIdea *bool) ([]byte, int, int, int, audio.RecordingInfo, error)
+	GetAudioLevels() float64
+}
 
 // AudioHandler coordinates audio capture, playback, and versioning for Wails.
 type AudioHandler struct {
-	audioRecorder *audio.AudioRecorder
-	audioPlayer   *audio.AudioPlayer
-	audioService  *service.AudioService
+	audioRecorder    recorder
+	audioPlayer      *audio.AudioPlayer
+	audioService     *service.AudioService
+	quickIdeaService *service.QuickIdeaService
 }
 
 // NewAudioHandler instantiates an AudioHandler.
 func NewAudioHandler(
-	recorder *audio.AudioRecorder,
+	recorder recorder,
 	player *audio.AudioPlayer,
 	audioService *service.AudioService,
+	quickIdeaService *service.QuickIdeaService,
 ) *AudioHandler {
 	return &AudioHandler{
-		audioRecorder: recorder,
-		audioPlayer:   player,
-		audioService:  audioService,
+		audioRecorder:    recorder,
+		audioPlayer:      player,
+		audioService:     audioService,
+		quickIdeaService: quickIdeaService,
 	}
 }
 
@@ -56,6 +68,15 @@ func (h *AudioHandler) StartRecording(songID int, trackName string, deviceID str
 	return h.audioRecorder.StartRecording(songID, trackName, deviceID)
 }
 
+// StartQuickIdeaRecording starts capture for an idea that is not tied to a song.
+func (h *AudioHandler) StartQuickIdeaRecording(deviceID string) error {
+	log.Printf("[AudioHandler] StartQuickIdeaRecording: Device: %s", deviceID)
+	if h.audioRecorder == nil {
+		return fmt.Errorf("audio recorder is not initialized")
+	}
+	return h.audioRecorder.StartQuickIdeaRecording(deviceID)
+}
+
 // StopRecording halts capture, writes WAV file to disk, registers the take, and returns the AudioVersion.
 func (h *AudioHandler) StopRecording(trackID int) (*models.AudioVersion, error) {
 	log.Printf("[AudioHandler] StopRecording: Target Track ID: %d", trackID)
@@ -63,13 +84,13 @@ func (h *AudioHandler) StopRecording(trackID int) (*models.AudioVersion, error) 
 		return nil, fmt.Errorf("audio recorder is not initialized")
 	}
 
-	songID := h.audioRecorder.SongID
-	trackName := h.audioRecorder.TrackName
-
-	pcmData, sampleRate, channels, bitsPerSample, err := h.audioRecorder.StopRecording()
+	expectedQuickIdea := false
+	pcmData, sampleRate, channels, bitsPerSample, recording, err := h.audioRecorder.StopRecordingWithInfo(&expectedQuickIdea)
 	if err != nil {
 		return nil, err
 	}
+	songID := recording.SongID
+	trackName := recording.TrackName
 
 	wavPath, err := audio.ResolveProjectAudioPath(songID, trackName, trackID)
 	if err != nil {
@@ -99,6 +120,52 @@ func (h *AudioHandler) StopRecording(trackID int) (*models.AudioVersion, error) 
 
 	log.Printf("[AudioHandler] Audio version registered: ID %d", av.ID)
 	return av, nil
+}
+
+// StopQuickIdeaRecording saves a standalone idea as a WAV and registers its path in SQLite.
+func (h *AudioHandler) StopQuickIdeaRecording() (*models.QuickIdea, error) {
+	log.Printf("[AudioHandler] StopQuickIdeaRecording")
+	if h.audioRecorder == nil {
+		return nil, fmt.Errorf("audio recorder is not initialized")
+	}
+	if h.quickIdeaService == nil {
+		return nil, fmt.Errorf("quick idea service is not initialized")
+	}
+
+	expectedQuickIdea := true
+	pcmData, sampleRate, channels, bitsPerSample, _, err := h.audioRecorder.StopRecordingWithInfo(&expectedQuickIdea)
+	if err != nil {
+		return nil, err
+	}
+	if len(pcmData) == 0 {
+		return nil, fmt.Errorf("quick idea recording contains no audio")
+	}
+
+	wavPath, err := audio.ResolveQuickIdeaAudioPath()
+	if err != nil {
+		return nil, fmt.Errorf("resolve quick idea audio path: %w", err)
+	}
+	log.Printf("[AudioHandler] Writing WAV file to: %s", wavPath)
+	if err := audio.WriteWavFile(wavPath, pcmData, sampleRate, channels, bitsPerSample); err != nil {
+		cleanupErr := removeQuickIdeaAudioFile(wavPath)
+		return nil, errors.Join(fmt.Errorf("save quick idea WAV: %w", err), cleanupErr)
+	}
+
+	log.Printf("[AudioHandler] Registering quick idea in database...")
+	idea, err := h.quickIdeaService.RegisterQuickIdea(context.Background(), wavPath)
+	if err != nil {
+		cleanupErr := removeQuickIdeaAudioFile(wavPath)
+		return nil, errors.Join(fmt.Errorf("register quick idea: %w", err), cleanupErr)
+	}
+	log.Printf("[AudioHandler] Quick idea registered: ID %d", idea.ID)
+	return idea, nil
+}
+
+func removeQuickIdeaAudioFile(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove unregistered quick idea WAV: %w", err)
+	}
+	return nil
 }
 
 // GetAudioLevels returns the current normalized peak level [0.0, 1.0].

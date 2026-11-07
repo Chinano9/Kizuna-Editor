@@ -31,7 +31,7 @@ func setupTestApp(t *testing.T) *App {
 	songHandler := bindings.NewSongHandler(db.SongService())
 	trackHandler := bindings.NewTrackHandler(db.TrackService(), db.InstrumentRepository())
 	albumHandler := bindings.NewAlbumHandler(db.AlbumService())
-	audioHandler := bindings.NewAudioHandler(audioRec, audioPlay, db.AudioService())
+	audioHandler := bindings.NewAudioHandler(audioRec, audioPlay, db.AudioService(), db.QuickIdeaService())
 
 	app := &App{
 		db:           db,

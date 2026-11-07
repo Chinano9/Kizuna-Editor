@@ -41,12 +41,13 @@ const (
 
 // DBManager serves as a facade coordinating data services and repository abstractions for the Wails desktop app.
 type DBManager struct {
-	db           *sql.DB
-	songService  *service.SongService
-	trackService *service.TrackService
-	albumService *service.AlbumService
-	audioService *service.AudioService
-	instRepo     repository.InstrumentRepository
+	db               *sql.DB
+	songService      *service.SongService
+	trackService     *service.TrackService
+	albumService     *service.AlbumService
+	audioService     *service.AudioService
+	quickIdeaService *service.QuickIdeaService
+	instRepo         repository.InstrumentRepository
 }
 
 // NewDBManager initializes the SQLite connection, executes pending versioned migrations,
@@ -90,15 +91,17 @@ func NewDBManagerWithDB(db *sql.DB) *DBManager {
 	trackRepo := repository.NewTrackRepository(db)
 	albumRepo := repository.NewAlbumRepository(db)
 	audioRepo := repository.NewAudioRepository(db)
+	quickIdeaRepo := repository.NewQuickIdeaRepository(db)
 	instRepo := repository.NewInstrumentRepository(db)
 
 	return &DBManager{
-		db:           db,
-		songService:  service.NewSongService(db, songRepo, trackRepo),
-		trackService: service.NewTrackService(trackRepo),
-		albumService: service.NewAlbumService(albumRepo, songRepo),
-		audioService: service.NewAudioService(audioRepo),
-		instRepo:     instRepo,
+		db:               db,
+		songService:      service.NewSongService(db, songRepo, trackRepo),
+		trackService:     service.NewTrackService(trackRepo),
+		albumService:     service.NewAlbumService(albumRepo, songRepo),
+		audioService:     service.NewAudioService(audioRepo),
+		quickIdeaService: service.NewQuickIdeaService(quickIdeaRepo),
+		instRepo:         instRepo,
 	}
 }
 
@@ -128,6 +131,11 @@ func (m *DBManager) AlbumService() *service.AlbumService {
 // AudioService returns the underlying AudioService for direct access.
 func (m *DBManager) AudioService() *service.AudioService {
 	return m.audioService
+}
+
+// QuickIdeaService returns the service for independent recorded audio ideas.
+func (m *DBManager) QuickIdeaService() *service.QuickIdeaService {
+	return m.quickIdeaService
 }
 
 // InstrumentRepository returns the underlying InstrumentRepository for direct access.

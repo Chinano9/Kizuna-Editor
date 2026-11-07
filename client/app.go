@@ -47,7 +47,7 @@ func NewApp() *App {
 	songHandler := bindings.NewSongHandler(db.SongService())
 	trackHandler := bindings.NewTrackHandler(db.TrackService(), db.InstrumentRepository())
 	albumHandler := bindings.NewAlbumHandler(db.AlbumService())
-	audioHandler := bindings.NewAudioHandler(audioRec, audioPlay, db.AudioService())
+	audioHandler := bindings.NewAudioHandler(audioRec, audioPlay, db.AudioService(), db.QuickIdeaService())
 
 	return &App{
 		db:           db,
@@ -134,9 +134,19 @@ func (a *App) StartRecording(songID int, trackName string, deviceID string) erro
 	return a.audioHandler.StartRecording(songID, trackName, deviceID)
 }
 
+// StartQuickIdeaRecording starts a standalone audio idea recording.
+func (a *App) StartQuickIdeaRecording(deviceID string) error {
+	return a.audioHandler.StartQuickIdeaRecording(deviceID)
+}
+
 // StopRecording stops capture, saves WAV to disk, and registers the take in the database.
 func (a *App) StopRecording(trackID int) (*models.AudioVersion, error) {
 	return a.audioHandler.StopRecording(trackID)
+}
+
+// StopQuickIdeaRecording saves and registers the active standalone audio idea.
+func (a *App) StopQuickIdeaRecording() (*models.QuickIdea, error) {
+	return a.audioHandler.StopQuickIdeaRecording()
 }
 
 // GetAudioLevels returns the current real-time normalized audio peak amplitude [0.0, 1.0].

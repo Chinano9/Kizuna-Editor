@@ -234,3 +234,27 @@ func TestAudioService(t *testing.T) {
 		t.Fatalf("failed to delete audio version: %v", err)
 	}
 }
+
+func TestQuickIdeaService(t *testing.T) {
+	db, _, _, _, _ := setupTestServices(t)
+	defer db.Close()
+
+	quickIdeaService := NewQuickIdeaService(repository.NewQuickIdeaRepository(db))
+	idea, err := quickIdeaService.RegisterQuickIdea(context.Background(), " /audio/quick-idea.wav ")
+	if err != nil {
+		t.Fatalf("failed to register quick idea: %v", err)
+	}
+	if idea.ID <= 0 {
+		t.Fatalf("expected positive quick idea ID, got %d", idea.ID)
+	}
+	if idea.FilePath != "/audio/quick-idea.wav" {
+		t.Errorf("expected trimmed file path, got %q", idea.FilePath)
+	}
+	if idea.CreatedAt.IsZero() {
+		t.Error("expected created timestamp")
+	}
+
+	if _, err := quickIdeaService.RegisterQuickIdea(context.Background(), " "); err == nil {
+		t.Fatal("expected error for empty quick idea file path")
+	}
+}

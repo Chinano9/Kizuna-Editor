@@ -86,3 +86,19 @@ func TestResolveProjectAudioPath(t *testing.T) {
 		t.Errorf("expected absolute path, got %s", path)
 	}
 }
+
+func TestResolveQuickIdeaAudioPath(t *testing.T) {
+	path, err := ResolveQuickIdeaAudioPath()
+	if err != nil {
+		t.Fatalf("failed to resolve quick idea audio path: %v", err)
+	}
+	if filepath.Ext(path) != ".wav" {
+		t.Errorf("expected .wav extension, got %s", filepath.Ext(path))
+	}
+	if !filepath.IsAbs(path) {
+		t.Errorf("expected absolute path, got %s", path)
+	}
+	if filepath.Base(filepath.Dir(path)) != "ideas" {
+		t.Errorf("expected path under ideas directory, got %s", path)
+	}
+}
