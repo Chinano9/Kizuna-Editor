@@ -149,6 +149,11 @@ func (a *App) StopQuickIdeaRecording() (*models.QuickIdea, error) {
 	return a.audioHandler.StopQuickIdeaRecording()
 }
 
+// GetQuickIdeas lists saved standalone audio ideas.
+func (a *App) GetQuickIdeas() ([]models.QuickIdea, error) {
+	return a.audioHandler.GetQuickIdeas()
+}
+
 // GetAudioLevels returns the current real-time normalized audio peak amplitude [0.0, 1.0].
 func (a *App) GetAudioLevels() float64 {
 	return a.audioHandler.GetAudioLevels()
@@ -182,6 +187,11 @@ func (a *App) PlayAudio(filePath string) error {
 // PauseAudio pauses or resumes active audio playback.
 func (a *App) PauseAudio() error {
 	return a.audioHandler.PauseAudio()
+}
+
+// StopAudio stops playback and releases the output device.
+func (a *App) StopAudio() error {
+	return a.audioHandler.StopAudio()
 }
 
 // SeekAudio shifts playback progress to the given second offset.

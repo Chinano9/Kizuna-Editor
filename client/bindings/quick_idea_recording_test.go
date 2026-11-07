@@ -179,3 +179,32 @@ func TestStopQuickIdeaRecordingReturnsRecorderError(t *testing.T) {
 		t.Fatalf("expected recorder error %q, got %v", rec.err, err)
 	}
 }
+
+func TestGetQuickIdeasAddsWAVDuration(t *testing.T) {
+	handler, _, _ := newQuickIdeaRecordingHandler(t, nil)
+	wavPath := filepath.Join(t.TempDir(), "idea.wav")
+	if err := audio.WriteWavFile(wavPath, make([]byte, 44100*2), 44100, 1, 16); err != nil {
+		t.Fatalf("write WAV: %v", err)
+	}
+	if _, err := handler.quickIdeaService.RegisterQuickIdea(context.Background(), wavPath); err != nil {
+		t.Fatalf("register quick idea: %v", err)
+	}
+
+	ideas, err := handler.GetQuickIdeas()
+	if err != nil {
+		t.Fatalf("get quick ideas: %v", err)
+	}
+	if len(ideas) != 1 {
+		t.Fatalf("expected one quick idea, got %d", len(ideas))
+	}
+	if ideas[0].DurationSeconds == nil || *ideas[0].DurationSeconds != 1 {
+		t.Errorf("expected 1 second duration, got %v", ideas[0].DurationSeconds)
+	}
+}
+
+func TestPlayAudioReportsMissingQuickIdeaFile(t *testing.T) {
+	handler, _, _ := newQuickIdeaRecordingHandler(t, nil)
+	if err := handler.PlayAudio(filepath.Join(t.TempDir(), "missing.wav")); err == nil {
+		t.Fatal("expected missing audio file to return an error")
+	}
+}

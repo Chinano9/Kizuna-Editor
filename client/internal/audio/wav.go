@@ -21,6 +21,7 @@ package audio
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -51,13 +52,13 @@ func WriteWavFile(filePath string, pcmData []byte, sampleRate, channels, bitsPer
 	copy(header[8:12], []byte("WAVE"))
 
 	copy(header[12:16], []byte("fmt "))
-	binary.LittleEndian.PutUint32(header[16:20], 16)                     // SubChunk1Size (16 for PCM)
-	binary.LittleEndian.PutUint16(header[20:22], 1)                      // AudioFormat (1 = PCM)
-	binary.LittleEndian.PutUint16(header[22:24], uint16(channels))       // NumChannels
-	binary.LittleEndian.PutUint32(header[24:28], uint32(sampleRate))     // SampleRate
-	binary.LittleEndian.PutUint32(header[28:32], byteRate)               // ByteRate
-	binary.LittleEndian.PutUint16(header[32:34], blockAlign)             // BlockAlign
-	binary.LittleEndian.PutUint16(header[34:36], uint16(bitsPerSample))   // BitsPerSample
+	binary.LittleEndian.PutUint32(header[16:20], 16)                    // SubChunk1Size (16 for PCM)
+	binary.LittleEndian.PutUint16(header[20:22], 1)                     // AudioFormat (1 = PCM)
+	binary.LittleEndian.PutUint16(header[22:24], uint16(channels))      // NumChannels
+	binary.LittleEndian.PutUint32(header[24:28], uint32(sampleRate))    // SampleRate
+	binary.LittleEndian.PutUint32(header[28:32], byteRate)              // ByteRate
+	binary.LittleEndian.PutUint16(header[32:34], blockAlign)            // BlockAlign
+	binary.LittleEndian.PutUint16(header[34:36], uint16(bitsPerSample)) // BitsPerSample
 
 	copy(header[36:40], []byte("data"))
 	binary.LittleEndian.PutUint32(header[40:44], subChunk2Size)
@@ -119,6 +120,34 @@ func LoadWavFile(filePath string) (pcmData []byte, sampleRate, channels, bitsPer
 
 	pcmData = data[pcmStart : pcmStart+int(subChunk2Size)]
 	return pcmData, sampleRate, channels, bitsPerSample, nil
+}
+
+// GetWavDuration reads the PCM format and data lengths from an application-generated WAV header.
+func GetWavDuration(filePath string) (float64, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("open WAV file: %w", err)
+	}
+	defer file.Close()
+
+	header := make([]byte, 44)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return 0, fmt.Errorf("read WAV header: %w", err)
+	}
+	if string(header[0:4]) != "RIFF" || string(header[8:12]) != "WAVE" ||
+		string(header[12:16]) != "fmt " || string(header[36:40]) != "data" {
+		return 0, fmt.Errorf("invalid PCM WAV header")
+	}
+	if binary.LittleEndian.Uint16(header[20:22]) != 1 {
+		return 0, fmt.Errorf("unsupported WAV format")
+	}
+
+	byteRate := binary.LittleEndian.Uint32(header[28:32])
+	if byteRate == 0 {
+		return 0, fmt.Errorf("invalid WAV byte rate")
+	}
+	dataSize := binary.LittleEndian.Uint32(header[40:44])
+	return float64(dataSize) / float64(byteRate), nil
 }
 
 // ResolveProjectAudioPath determines the absolute OS-appropriate project path to save recorded .wav files.

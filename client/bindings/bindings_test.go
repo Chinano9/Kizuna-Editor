@@ -170,4 +170,8 @@ func TestAudioHandlerBasics(t *testing.T) {
 	if level != 0.0 {
 		t.Errorf("expected level 0.0 when not recording, got %f", level)
 	}
+
+	if err := audioH.StopAudio(); err != nil {
+		t.Errorf("expected StopAudio to succeed without active playback, got %v", err)
+	}
 }

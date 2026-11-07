@@ -161,6 +161,26 @@ func (h *AudioHandler) StopQuickIdeaRecording() (*models.QuickIdea, error) {
 	return idea, nil
 }
 
+// GetQuickIdeas lists saved audio ideas with their WAV durations when available.
+func (h *AudioHandler) GetQuickIdeas() ([]models.QuickIdea, error) {
+	if h.quickIdeaService == nil {
+		return nil, fmt.Errorf("quick idea service is not initialized")
+	}
+	ideas, err := h.quickIdeaService.ListQuickIdeas(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	for i := range ideas {
+		duration, err := audio.GetWavDuration(ideas[i].FilePath)
+		if err != nil {
+			log.Printf("[AudioHandler] Could not read duration for quick idea %d at %q: %v", ideas[i].ID, ideas[i].FilePath, err)
+			continue
+		}
+		ideas[i].DurationSeconds = &duration
+	}
+	return ideas, nil
+}
+
 func removeQuickIdeaAudioFile(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove unregistered quick idea WAV: %w", err)
@@ -212,6 +232,15 @@ func (h *AudioHandler) PauseAudio() error {
 		return fmt.Errorf("audio player is not initialized")
 	}
 	return h.audioPlayer.Pause()
+}
+
+// StopAudio stops playback and releases the active output device.
+func (h *AudioHandler) StopAudio() error {
+	if h.audioPlayer == nil {
+		return fmt.Errorf("audio player is not initialized")
+	}
+	h.audioPlayer.Stop()
+	return nil
 }
 
 // SeekAudio repositions playback progress to the specified second mark.

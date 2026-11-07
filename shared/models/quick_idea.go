@@ -25,9 +25,10 @@ import (
 
 // QuickIdea represents an audio idea that is not associated with a song or track.
 type QuickIdea struct {
-	ID        int       `db:"id" json:"id"`
-	FilePath  string    `db:"file_path" json:"file_path"`
-	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	ID              int       `db:"id" json:"id"`
+	FilePath        string    `db:"file_path" json:"file_path"`
+	CreatedAt       time.Time `db:"created_at" json:"created_at"`
+	DurationSeconds *float64  `db:"-" json:"duration_seconds,omitempty"`
 }
 
 // NewQuickIdea creates and validates an independently recorded audio idea.

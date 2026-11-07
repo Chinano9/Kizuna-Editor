@@ -257,4 +257,12 @@ func TestQuickIdeaService(t *testing.T) {
 	if _, err := quickIdeaService.RegisterQuickIdea(context.Background(), " "); err == nil {
 		t.Fatal("expected error for empty quick idea file path")
 	}
+
+	ideas, err := quickIdeaService.ListQuickIdeas(context.Background())
+	if err != nil {
+		t.Fatalf("failed to list quick ideas: %v", err)
+	}
+	if len(ideas) != 1 || ideas[0].ID != idea.ID {
+		t.Fatalf("expected registered quick idea in list, got %+v", ideas)
+	}
 }

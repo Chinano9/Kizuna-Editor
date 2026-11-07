@@ -102,3 +102,33 @@ func TestResolveQuickIdeaAudioPath(t *testing.T) {
 		t.Errorf("expected path under ideas directory, got %s", path)
 	}
 }
+
+func TestGetWavDuration(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "duration.wav")
+	pcmData := make([]byte, 44100*2)
+	if err := WriteWavFile(filePath, pcmData, 44100, 1, 16); err != nil {
+		t.Fatalf("write WAV: %v", err)
+	}
+
+	duration, err := GetWavDuration(filePath)
+	if err != nil {
+		t.Fatalf("get WAV duration: %v", err)
+	}
+	if duration != 1 {
+		t.Errorf("expected 1 second duration, got %f", duration)
+	}
+}
+
+func TestGetWavDurationRejectsInvalidOrMissingFile(t *testing.T) {
+	if _, err := GetWavDuration(filepath.Join(t.TempDir(), "missing.wav")); err == nil {
+		t.Fatal("expected missing file error")
+	}
+
+	filePath := filepath.Join(t.TempDir(), "invalid.wav")
+	if err := os.WriteFile(filePath, []byte("not a WAV"), 0o600); err != nil {
+		t.Fatalf("write invalid WAV: %v", err)
+	}
+	if _, err := GetWavDuration(filePath); err == nil {
+		t.Fatal("expected invalid WAV error")
+	}
+}
