@@ -49,3 +49,12 @@ func (s *QuickIdeaService) RegisterQuickIdea(ctx context.Context, filePath strin
 	idea.ID = id
 	return idea, nil
 }
+
+// ListQuickIdeas returns all saved audio ideas, newest first.
+func (s *QuickIdeaService) ListQuickIdeas(ctx context.Context) ([]models.QuickIdea, error) {
+	ideas, err := s.quickIdeaRepo.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list quick ideas: %w", err)
+	}
+	return ideas, nil
+}

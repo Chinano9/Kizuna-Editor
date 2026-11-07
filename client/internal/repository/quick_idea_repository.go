@@ -28,6 +28,31 @@ import (
 // QuickIdeaRepository defines persistence operations for independent audio ideas.
 type QuickIdeaRepository interface {
 	Create(ctx context.Context, idea *models.QuickIdea) (int, error)
+	List(ctx context.Context) ([]models.QuickIdea, error)
+}
+
+// List retrieves all independent audio ideas, newest first.
+func (r *SQLiteQuickIdeaRepository) List(ctx context.Context) ([]models.QuickIdea, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT id, file_path, created_at FROM quick_ideas ORDER BY created_at DESC, id DESC",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query quick ideas: %w", err)
+	}
+	defer rows.Close()
+
+	ideas := make([]models.QuickIdea, 0)
+	for rows.Next() {
+		var idea models.QuickIdea
+		if err := rows.Scan(&idea.ID, &idea.FilePath, &idea.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan quick idea: %w", err)
+		}
+		ideas = append(ideas, idea)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate quick ideas: %w", err)
+	}
+	return ideas, nil
 }
 
 // SQLiteQuickIdeaRepository implements QuickIdeaRepository for SQLite.
