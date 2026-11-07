@@ -40,6 +40,8 @@ export function GetPlaybackDuration():Promise<number>;
 
 export function GetPlaybackPosition():Promise<number>;
 
+export function GetQuickIdeas():Promise<Array<models.QuickIdea>>;
+
 export function GetRecentSongs():Promise<Array<models.Song>>;
 
 export function GetSong(arg1:number):Promise<models.Song>;
@@ -67,6 +69,8 @@ export function SongHandler():Promise<bindings.SongHandler>;
 export function StartQuickIdeaRecording(arg1:string):Promise<void>;
 
 export function StartRecording(arg1:number,arg2:string,arg3:string):Promise<void>;
+
+export function StopAudio():Promise<void>;
 
 export function StopQuickIdeaRecording():Promise<models.QuickIdea>;
 

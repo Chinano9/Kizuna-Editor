@@ -34,6 +34,10 @@ export function GetPlaybackPosition() {
   return window['go']['bindings']['AudioHandler']['GetPlaybackPosition']();
 }
 
+export function GetQuickIdeas() {
+  return window['go']['bindings']['AudioHandler']['GetQuickIdeas']();
+}
+
 export function PauseAudio() {
   return window['go']['bindings']['AudioHandler']['PauseAudio']();
 }
@@ -60,6 +64,10 @@ export function StartQuickIdeaRecording(arg1) {
 
 export function StartRecording(arg1, arg2, arg3) {
   return window['go']['bindings']['AudioHandler']['StartRecording'](arg1, arg2, arg3);
+}
+
+export function StopAudio() {
+  return window['go']['bindings']['AudioHandler']['StopAudio']();
 }
 
 export function StopQuickIdeaRecording() {

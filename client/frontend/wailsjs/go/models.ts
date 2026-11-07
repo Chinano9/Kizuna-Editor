@@ -177,6 +177,7 @@ export namespace models {
 	    file_path: string;
 	    // Go type: time
 	    created_at: any;
+	    duration_seconds?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new QuickIdea(source);
@@ -187,6 +188,7 @@ export namespace models {
 	        this.id = source["id"];
 	        this.file_path = source["file_path"];
 	        this.created_at = this.convertValues(source["created_at"], null);
+	        this.duration_seconds = source["duration_seconds"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

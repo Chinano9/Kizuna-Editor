@@ -19,6 +19,8 @@ export function GetPlaybackDuration():Promise<number>;
 
 export function GetPlaybackPosition():Promise<number>;
 
+export function GetQuickIdeas():Promise<Array<models.QuickIdea>>;
+
 export function PauseAudio():Promise<void>;
 
 export function PlayAudio(arg1:string):Promise<void>;
@@ -32,6 +34,8 @@ export function SetAudioVolume(arg1:number):Promise<void>;
 export function StartQuickIdeaRecording(arg1:string):Promise<void>;
 
 export function StartRecording(arg1:number,arg2:string,arg3:string):Promise<void>;
+
+export function StopAudio():Promise<void>;
 
 export function StopQuickIdeaRecording():Promise<models.QuickIdea>;
 

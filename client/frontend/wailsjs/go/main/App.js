@@ -74,6 +74,10 @@ export function GetPlaybackPosition() {
   return window['go']['main']['App']['GetPlaybackPosition']();
 }
 
+export function GetQuickIdeas() {
+  return window['go']['main']['App']['GetQuickIdeas']();
+}
+
 export function GetRecentSongs() {
   return window['go']['main']['App']['GetRecentSongs']();
 }
@@ -128,6 +132,10 @@ export function StartQuickIdeaRecording(arg1) {
 
 export function StartRecording(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartRecording'](arg1, arg2, arg3);
+}
+
+export function StopAudio() {
+  return window['go']['main']['App']['StopAudio']();
 }
 
 export function StopQuickIdeaRecording() {
