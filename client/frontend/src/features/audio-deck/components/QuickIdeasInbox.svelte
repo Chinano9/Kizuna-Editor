@@ -486,6 +486,21 @@
         border-radius: 4px;
         padding: 7px 10px;
         font: inherit;
+        transition:
+            color 140ms ease,
+            border-color 140ms ease,
+            background-color 140ms ease,
+            box-shadow 140ms ease,
+            transform 140ms ease;
+    }
+
+    .idea-actions button:not(:disabled):hover,
+    .idea-actions button:not(:disabled):focus-visible {
+        color: var(--lcd-amber, #ffc966);
+        border-color: var(--lcd-button-border, #c3933b);
+        background: #1b1a10;
+        box-shadow: 0 0 10px rgba(255, 201, 102, 0.18);
+        transform: translateY(-1px);
     }
 
     .idea-actions button:disabled {
