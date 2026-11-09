@@ -35,7 +35,7 @@ func setupTestBindings(t *testing.T) (*SongHandler, *TrackHandler, *AlbumHandler
 	trackService := service.NewTrackService(trackRepo)
 	albumService := service.NewAlbumService(albumRepo, songRepo)
 	audioService := service.NewAudioService(audioRepo)
-	quickIdeaService := service.NewQuickIdeaService(quickIdeaRepo)
+	quickIdeaService := service.NewQuickIdeaService(db, quickIdeaRepo)
 
 	audioRec := audio.NewAudioRecorder()
 	audioPlay := audio.NewAudioPlayer()

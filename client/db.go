@@ -101,7 +101,7 @@ func NewDBManagerWithDB(db *sql.DB) *DBManager {
 		trackService:               service.NewTrackService(trackRepo),
 		albumService:               service.NewAlbumService(albumRepo, songRepo),
 		audioService:               service.NewAudioService(audioRepo),
-		quickIdeaService:           service.NewQuickIdeaService(quickIdeaRepo),
+		quickIdeaService:           service.NewQuickIdeaService(db, quickIdeaRepo),
 		quickIdeaConversionService: service.NewQuickIdeaConversionService(db, songRepo, trackRepo, audioRepo, quickIdeaRepo),
 		instRepo:                   instRepo,
 	}
@@ -146,6 +146,14 @@ func (m *DBManager) ConvertQuickIdeaToSong(ideaID int, title string) (int, error
 		return 0, fmt.Errorf("quick idea conversion service is not initialized")
 	}
 	return m.quickIdeaConversionService.ConvertToSong(context.Background(), ideaID, title)
+}
+
+// DeleteQuickIdea removes a saved idea and its audio file.
+func (m *DBManager) DeleteQuickIdea(ideaID int) error {
+	if m == nil || m.quickIdeaService == nil {
+		return fmt.Errorf("quick idea service is not initialized")
+	}
+	return m.quickIdeaService.DeleteQuickIdea(context.Background(), ideaID)
 }
 
 // InstrumentRepository returns the underlying InstrumentRepository for direct access.

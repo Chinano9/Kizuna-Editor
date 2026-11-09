@@ -159,6 +159,11 @@ func (a *App) ConvertQuickIdeaToSong(ideaID int, title string) (int, error) {
 	return a.db.ConvertQuickIdeaToSong(ideaID, title)
 }
 
+// DeleteQuickIdea removes a saved idea and its WAV file.
+func (a *App) DeleteQuickIdea(ideaID int) error {
+	return a.db.DeleteQuickIdea(ideaID)
+}
+
 // GetAudioLevels returns the current real-time normalized audio peak amplitude [0.0, 1.0].
 func (a *App) GetAudioLevels() float64 {
 	return a.audioHandler.GetAudioLevels()

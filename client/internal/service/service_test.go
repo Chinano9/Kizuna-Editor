@@ -239,7 +239,7 @@ func TestQuickIdeaService(t *testing.T) {
 	db, _, _, _, _ := setupTestServices(t)
 	defer db.Close()
 
-	quickIdeaService := NewQuickIdeaService(repository.NewQuickIdeaRepository(db))
+	quickIdeaService := NewQuickIdeaService(db, repository.NewQuickIdeaRepository(db))
 	idea, err := quickIdeaService.RegisterQuickIdea(context.Background(), " /audio/quick-idea.wav ")
 	if err != nil {
 		t.Fatalf("failed to register quick idea: %v", err)

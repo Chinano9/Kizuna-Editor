@@ -52,7 +52,7 @@ func newQuickIdeaRecordingHandler(t *testing.T, pcmData []byte) (*AudioHandler, 
 	}
 
 	rec := &fakeRecorder{pcmData: pcmData}
-	quickIdeaService := service.NewQuickIdeaService(repository.NewQuickIdeaRepository(db))
+	quickIdeaService := service.NewQuickIdeaService(db, repository.NewQuickIdeaRepository(db))
 	return NewAudioHandler(rec, audio.NewAudioPlayer(), nil, quickIdeaService), db, rec
 }
 

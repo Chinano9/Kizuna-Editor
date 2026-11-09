@@ -2,6 +2,7 @@
     import { onDestroy, onMount } from "svelte";
     import {
         ConvertQuickIdeaToSong,
+        DeleteQuickIdea,
         GetPlaybackDuration,
         GetPlaybackPosition,
         GetQuickIdeas,
@@ -30,6 +31,7 @@
     let selectedIdea: QuickIdea | null = null;
     let songTitleDraft = "";
     let convertingIdeaID: number | null = null;
+    let deletingIdeaID: number | null = null;
 
     onMount(() => {
         void loadIdeas();
@@ -93,6 +95,38 @@
             toastStore.error(`Could not convert Quick Idea: ${errorMessage(error)}`);
         } finally {
             convertingIdeaID = null;
+        }
+    }
+
+    async function deleteIdea(idea: QuickIdea) {
+        if (deletingIdeaID !== null) return;
+        const confirmed = window.confirm(
+            `Delete Quick Idea #${idea.id}? Its audio file will be permanently deleted.`
+        );
+        if (!confirmed) return;
+
+        deletingIdeaID = idea.id;
+        try {
+            if (playingIdeaID === idea.id) {
+                await StopAudio();
+                clearPollTimer();
+                playbackSession++;
+                playingIdeaID = null;
+                isPlaying = false;
+                positionSeconds = 0;
+                seekPreviewSeconds = 0;
+                durationSeconds = 0;
+                isSeeking = false;
+            }
+
+            await DeleteQuickIdea(idea.id);
+            ideas = ideas.filter((savedIdea) => savedIdea.id !== idea.id);
+            toastStore.success("Quick Idea and audio file deleted.");
+        } catch (error) {
+            console.error("Failed to delete quick idea:", error);
+            toastStore.error(`Could not delete Quick Idea: ${errorMessage(error)}`);
+        } finally {
+            deletingIdeaID = null;
         }
     }
 
@@ -286,7 +320,13 @@
                     </span>
 
                     <div class="idea-actions">
-                        <button type="button" disabled title="TODO: Delete idea">Delete · (TODO)</button>
+                        <button
+                            type="button"
+                            disabled={deletingIdeaID !== null}
+                            on:click={() => deleteIdea(idea)}
+                        >
+                            {deletingIdeaID === idea.id ? "Deleting..." : "Delete"}
+                        </button>
                         <button type="button" on:click={() => openConversionDialog(idea)}>Convert to Song</button>
                     </div>
                 </article>

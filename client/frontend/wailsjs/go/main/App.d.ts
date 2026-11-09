@@ -18,6 +18,8 @@ export function CreateAlbum(arg1:string,arg2:string,arg3:string):Promise<models.
 
 export function DeleteAlbum(arg1:number):Promise<void>;
 
+export function DeleteQuickIdea(arg1:number):Promise<void>;
+
 export function DeleteTrack(arg1:number):Promise<void>;
 
 export function GetAlbum(arg1:number):Promise<models.Album>;

@@ -30,6 +30,10 @@ export function DeleteAlbum(arg1) {
   return window['go']['main']['App']['DeleteAlbum'](arg1);
 }
 
+export function DeleteQuickIdea(arg1) {
+  return window['go']['main']['App']['DeleteQuickIdea'](arg1);
+}
+
 export function DeleteTrack(arg1) {
   return window['go']['main']['App']['DeleteTrack'](arg1);
 }
