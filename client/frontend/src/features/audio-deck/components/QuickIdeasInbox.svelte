@@ -503,6 +503,10 @@
         transform: translateY(-1px);
     }
 
+    .idea-actions button:not(:disabled) {
+        cursor: pointer;
+    }
+
     .idea-actions button:disabled {
         opacity: 0.55;
         cursor: not-allowed;
@@ -559,11 +563,30 @@
         background: #15110a;
         font: inherit;
         cursor: pointer;
+        transition:
+            color 140ms ease,
+            border-color 140ms ease,
+            background-color 140ms ease,
+            box-shadow 140ms ease,
+            transform 140ms ease;
+    }
+
+    .dialog-actions button:not(:disabled):hover,
+    .dialog-actions button:not(:disabled):focus-visible {
+        color: #ffe09a;
+        border-color: #ffe09a;
+        background: #1b1a10;
+        box-shadow: 0 0 10px rgba(255, 201, 102, 0.2);
+        transform: translateY(-1px);
     }
 
     .dialog-actions button:disabled {
         opacity: 0.55;
         cursor: not-allowed;
+    }
+
+    .dialog-actions button:not(:disabled) {
+        cursor: pointer;
     }
 
     .state-message {
