@@ -28,6 +28,7 @@ import (
 // AudioRepository defines persistence operations for recorded AudioVersion takes.
 type AudioRepository interface {
 	Create(ctx context.Context, av *models.AudioVersion) (int, error)
+	CreateWithTx(ctx context.Context, tx *sql.Tx, av *models.AudioVersion) (int, error)
 	GetByID(ctx context.Context, id int) (*models.AudioVersion, error)
 	GetBySongID(ctx context.Context, songID int) ([]models.AudioVersion, error)
 	GetByTrackID(ctx context.Context, trackID int) ([]models.AudioVersion, error)
@@ -46,6 +47,11 @@ func NewAudioRepository(db *sql.DB) *SQLiteAudioRepository {
 
 // Create inserts a new audio version record into the database.
 func (r *SQLiteAudioRepository) Create(ctx context.Context, av *models.AudioVersion) (int, error) {
+	return r.CreateWithTx(ctx, nil, av)
+}
+
+// CreateWithTx inserts an audio version, optionally within an existing transaction.
+func (r *SQLiteAudioRepository) CreateWithTx(ctx context.Context, tx *sql.Tx, av *models.AudioVersion) (int, error) {
 	if av == nil {
 		return 0, fmt.Errorf("audio version cannot be nil")
 	}
@@ -54,7 +60,13 @@ func (r *SQLiteAudioRepository) Create(ctx context.Context, av *models.AudioVers
 		INSERT INTO audio_versions (song_id, track_id, version_name, file_path, notes, created_at)
 		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
 
-	res, err := r.db.ExecContext(ctx, query, av.SongID, av.TrackID, av.VersionName, av.FilePath, av.Notes)
+	var res sql.Result
+	var err error
+	if tx != nil {
+		res, err = tx.ExecContext(ctx, query, av.SongID, av.TrackID, av.VersionName, av.FilePath, av.Notes)
+	} else {
+		res, err = r.db.ExecContext(ctx, query, av.SongID, av.TrackID, av.VersionName, av.FilePath, av.Notes)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("insert audio version: %w", err)
 	}

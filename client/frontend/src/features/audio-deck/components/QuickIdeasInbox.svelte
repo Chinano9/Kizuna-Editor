@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onDestroy, onMount } from "svelte";
     import {
+        ConvertQuickIdeaToSong,
         GetPlaybackDuration,
         GetPlaybackPosition,
         GetQuickIdeas,
@@ -11,6 +12,8 @@
     } from "@wails/go/main/App";
     import type { QuickIdea } from "@shared/types/wails";
     import { toastStore } from "@shared/stores/toastStore";
+    import { songId } from "@/stores/projectStore";
+    import { currentView } from "@/stores/viewStore";
 
     let ideas: QuickIdea[] = [];
     let isLoading = true;
@@ -24,6 +27,9 @@
     let pollTimer: ReturnType<typeof setInterval> | undefined;
     let playbackSession = 0;
     let isPolling = false;
+    let selectedIdea: QuickIdea | null = null;
+    let songTitleDraft = "";
+    let convertingIdeaID: number | null = null;
 
     onMount(() => {
         void loadIdeas();
@@ -50,6 +56,44 @@
 
     function errorMessage(error: unknown): string {
         return error instanceof Error ? error.message : String(error);
+    }
+
+    function openConversionDialog(idea: QuickIdea) {
+        selectedIdea = idea;
+        songTitleDraft = `Quick Idea #${idea.id}`;
+    }
+
+    async function convertSelectedIdea() {
+        const idea = selectedIdea;
+        const title = songTitleDraft.trim();
+        if (!idea || !title || convertingIdeaID !== null) return;
+
+        convertingIdeaID = idea.id;
+        try {
+            if (playingIdeaID === idea.id) {
+                await StopAudio();
+                clearPollTimer();
+                playbackSession++;
+                playingIdeaID = null;
+                isPlaying = false;
+                positionSeconds = 0;
+                seekPreviewSeconds = 0;
+                durationSeconds = 0;
+                isSeeking = false;
+            }
+
+            const newSongID = await ConvertQuickIdeaToSong(idea.id, title);
+            selectedIdea = null;
+            await loadIdeas();
+            toastStore.success("Quick Idea converted to a song.");
+            songId.set(newSongID);
+            currentView.set("editor");
+        } catch (error) {
+            console.error("Failed to convert quick idea:", error);
+            toastStore.error(`Could not convert Quick Idea: ${errorMessage(error)}`);
+        } finally {
+            convertingIdeaID = null;
+        }
     }
 
     function clearPollTimer() {
@@ -243,13 +287,37 @@
 
                     <div class="idea-actions">
                         <button type="button" disabled title="TODO: Delete idea">Delete · (TODO)</button>
-                        <button type="button" disabled title="TODO: Convert to project">Convert to project · (TODO)</button>
+                        <button type="button" on:click={() => openConversionDialog(idea)}>Convert to Song</button>
                     </div>
                 </article>
             {/each}
         </div>
     {/if}
 </section>
+
+{#if selectedIdea}
+    <div class="modal-backdrop">
+        <form
+            class="conversion-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="conversion-title"
+            on:submit|preventDefault={convertSelectedIdea}
+        >
+            <h2 id="conversion-title">Convert Quick Idea #{selectedIdea.id}</h2>
+            <label for="song-title">Song title</label>
+            <input id="song-title" bind:value={songTitleDraft} required maxlength="200" />
+            <div class="dialog-actions">
+                <button type="button" disabled={convertingIdeaID !== null} on:click={() => (selectedIdea = null)}>
+                    Cancel
+                </button>
+                <button type="submit" disabled={!songTitleDraft.trim() || convertingIdeaID !== null}>
+                    {convertingIdeaID === selectedIdea.id ? "Converting..." : "Convert to Song"}
+                </button>
+            </div>
+        </form>
+    </div>
+{/if}
 
 <style>
     .inbox {
@@ -381,6 +449,64 @@
     }
 
     .idea-actions button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+    }
+
+    .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        background: rgba(0, 0, 0, 0.72);
+    }
+
+    .conversion-dialog {
+        display: grid;
+        gap: 14px;
+        width: min(100%, 440px);
+        padding: 24px;
+        border: 1px solid var(--lcd-amber, #ffc966);
+        border-radius: 6px;
+        color: var(--lcd-text, #c8ff9f);
+        background: #0a100e;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+    }
+
+    .conversion-dialog h2 {
+        margin: 0;
+    }
+
+    .conversion-dialog input {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid var(--lcd-border, #243524);
+        border-radius: 4px;
+        color: var(--lcd-text, #c8ff9f);
+        background: #050607;
+        font: inherit;
+    }
+
+    .dialog-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 8px;
+    }
+
+    .dialog-actions button {
+        padding: 8px 12px;
+        border: 1px solid var(--lcd-button-border, #c3933b);
+        border-radius: 4px;
+        color: var(--lcd-amber, #ffc966);
+        background: #15110a;
+        font: inherit;
+        cursor: pointer;
+    }
+
+    .dialog-actions button:disabled {
         opacity: 0.55;
         cursor: not-allowed;
     }

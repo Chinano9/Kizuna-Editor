@@ -18,6 +18,10 @@ export function AudioHandler() {
   return window['go']['main']['App']['AudioHandler']();
 }
 
+export function ConvertQuickIdeaToSong(arg1, arg2) {
+  return window['go']['main']['App']['ConvertQuickIdeaToSong'](arg1, arg2);
+}
+
 export function CreateAlbum(arg1, arg2, arg3) {
   return window['go']['main']['App']['CreateAlbum'](arg1, arg2, arg3);
 }

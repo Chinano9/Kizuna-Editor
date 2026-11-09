@@ -154,6 +154,11 @@ func (a *App) GetQuickIdeas() ([]models.QuickIdea, error) {
 	return a.audioHandler.GetQuickIdeas()
 }
 
+// ConvertQuickIdeaToSong creates a song from a saved idea and returns the new song ID.
+func (a *App) ConvertQuickIdeaToSong(ideaID int, title string) (int, error) {
+	return a.db.ConvertQuickIdeaToSong(ideaID, title)
+}
+
 // GetAudioLevels returns the current real-time normalized audio peak amplitude [0.0, 1.0].
 func (a *App) GetAudioLevels() float64 {
 	return a.audioHandler.GetAudioLevels()

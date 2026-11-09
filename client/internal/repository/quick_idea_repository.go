@@ -29,6 +29,8 @@ import (
 type QuickIdeaRepository interface {
 	Create(ctx context.Context, idea *models.QuickIdea) (int, error)
 	List(ctx context.Context) ([]models.QuickIdea, error)
+	GetByID(ctx context.Context, tx *sql.Tx, id int) (*models.QuickIdea, error)
+	Delete(ctx context.Context, tx *sql.Tx, id int) error
 }
 
 // List retrieves all independent audio ideas, newest first.
@@ -53,6 +55,45 @@ func (r *SQLiteQuickIdeaRepository) List(ctx context.Context) ([]models.QuickIde
 		return nil, fmt.Errorf("iterate quick ideas: %w", err)
 	}
 	return ideas, nil
+}
+
+// GetByID retrieves one quick idea, optionally within a transaction.
+func (r *SQLiteQuickIdeaRepository) GetByID(ctx context.Context, tx *sql.Tx, id int) (*models.QuickIdea, error) {
+	query := "SELECT id, file_path, created_at FROM quick_ideas WHERE id = ?"
+	var idea models.QuickIdea
+	var err error
+	if tx != nil {
+		err = tx.QueryRowContext(ctx, query, id).Scan(&idea.ID, &idea.FilePath, &idea.CreatedAt)
+	} else {
+		err = r.db.QueryRowContext(ctx, query, id).Scan(&idea.ID, &idea.FilePath, &idea.CreatedAt)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get quick idea %d: %w", id, err)
+	}
+	return &idea, nil
+}
+
+// Delete removes one quick idea, optionally within a transaction.
+func (r *SQLiteQuickIdeaRepository) Delete(ctx context.Context, tx *sql.Tx, id int) error {
+	query := "DELETE FROM quick_ideas WHERE id = ?"
+	var result sql.Result
+	var err error
+	if tx != nil {
+		result, err = tx.ExecContext(ctx, query, id)
+	} else {
+		result, err = r.db.ExecContext(ctx, query, id)
+	}
+	if err != nil {
+		return fmt.Errorf("delete quick idea %d: %w", id, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check deleted quick idea %d: %w", id, err)
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("quick idea %d not found", id)
+	}
+	return nil
 }
 
 // SQLiteQuickIdeaRepository implements QuickIdeaRepository for SQLite.

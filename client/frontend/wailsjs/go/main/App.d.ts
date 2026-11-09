@@ -12,6 +12,8 @@ export function AssignSongToAlbum(arg1:number,arg2:number):Promise<void>;
 
 export function AudioHandler():Promise<bindings.AudioHandler>;
 
+export function ConvertQuickIdeaToSong(arg1:number,arg2:string):Promise<number>;
+
 export function CreateAlbum(arg1:string,arg2:string,arg3:string):Promise<models.Album>;
 
 export function DeleteAlbum(arg1:number):Promise<void>;
