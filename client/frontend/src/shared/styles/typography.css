@@ -1,0 +1,41 @@
+/*
+    Kizuna Editor - Tipografía y Fuentes Globales
+*/
+
+/* Bravura: Notación musical para AlphaTab */
+@font-face {
+    font-family: "alphaTab";
+    src: url("/font/Bravura.woff2") format("woff2");
+    font-weight: normal;
+    font-style: normal;
+}
+
+/* Nunito: Tipografía principal de interfaz */
+@font-face {
+    font-family: "Nunito";
+    font-style: normal;
+    font-weight: 400;
+    src:
+        local(""),
+        url("../../assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+}
+
+/* VT323: Tipografía estilo LCD / terminal retro */
+@font-face {
+    font-family: "VT323";
+    font-style: normal;
+    font-weight: 400;
+    src:
+        local(""),
+        url("/font/vt323.ttf") format("truetype");
+}
+
+/* Special Elite: Tipografía de máquina de escribir para vista previa */
+@font-face {
+    font-family: "Special Elite";
+    font-style: normal;
+    font-weight: 400;
+    src:
+        local(""),
+        url("/font/specialelite.ttf") format("truetype");
+}

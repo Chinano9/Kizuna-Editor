@@ -1,5 +1,90 @@
 <script lang="ts">
-    // Side bar layout for the dashboard view logic pending
+    import { onDestroy } from "svelte";
+    import {
+        StartQuickIdeaRecording,
+        StopQuickIdeaRecording,
+    } from "@wails/go/main/App";
+    import { audioRecorderStore } from "@/features/audio-deck/stores/audioRecorderStore";
+    import QuickIdeasInbox from "@/features/audio-deck/components/QuickIdeasInbox.svelte";
+    import { toastStore } from "@shared/stores/toastStore";
+
+    let activePanel: "library" | "ideas" = "library";
+    let isBusy = false;
+    let timerId: ReturnType<typeof setInterval> | undefined;
+    let isDestroyed = false;
+
+    function clearTimer() {
+        if (timerId !== undefined) {
+            clearInterval(timerId);
+            timerId = undefined;
+        }
+    }
+
+    function errorMessage(error: unknown): string {
+        return error instanceof Error ? error.message : String(error);
+    }
+
+    async function stopAndSaveQuickIdea() {
+        clearTimer();
+        try {
+            const idea = await StopQuickIdeaRecording();
+            toastStore.success("Audio idea saved.");
+            window.dispatchEvent(new CustomEvent("quick-idea-saved", { detail: idea }));
+        } catch (error) {
+            console.error("Failed to save quick idea recording:", error);
+            toastStore.error(`Could not save the idea: ${errorMessage(error)}`);
+        } finally {
+            audioRecorderStore.setRecording(false);
+            audioRecorderStore.setElapsed(0);
+            audioRecorderStore.setPeakLevel(0);
+        }
+    }
+
+    async function toggleQuickIdeaRecording() {
+        if (isBusy) return;
+        isBusy = true;
+
+        try {
+            if ($audioRecorderStore.isRecording) {
+                await stopAndSaveQuickIdea();
+                return;
+            }
+
+            await StartQuickIdeaRecording($audioRecorderStore.selectedDeviceID);
+            audioRecorderStore.setElapsed(0);
+            audioRecorderStore.setRecording(true);
+            timerId = setInterval(() => {
+                audioRecorderStore.setElapsed($audioRecorderStore.secondsElapsed + 1);
+            }, 1000);
+            toastStore.info("Idea recording started. Click again to save.", 2500);
+
+            if (isDestroyed) {
+                await stopAndSaveQuickIdea();
+            }
+        } catch (error) {
+            console.error("Failed to toggle quick idea recording:", error);
+            audioRecorderStore.setRecording(false);
+            audioRecorderStore.setElapsed(0);
+            audioRecorderStore.setPeakLevel(0);
+            toastStore.error(`Could not complete the recording: ${errorMessage(error)}`);
+        } finally {
+            isBusy = false;
+        }
+    }
+
+    function formatElapsed(seconds: number): string {
+        const minutes = Math.floor(seconds / 60).toString().padStart(2, "0");
+        const remainingSeconds = (seconds % 60).toString().padStart(2, "0");
+        return `${minutes}:${remainingSeconds}`;
+    }
+
+    onDestroy(() => {
+        isDestroyed = true;
+        clearTimer();
+        if ($audioRecorderStore.isRecording && !isBusy) {
+            void stopAndSaveQuickIdea();
+        }
+    });
 </script>
 
 <div class="layout-container">
@@ -9,13 +94,32 @@
         </div>
 
         <nav>
-            <button class="nav-item active">🎵 Library</button>
+            <button class="nav-item" class:active={activePanel === "library"} on:click={() => activePanel = "library"}>
+                🎵 Library
+            </button>
+            <button class="nav-item" class:active={activePanel === "ideas"} on:click={() => activePanel = "ideas"}>
+                🎙 Ideas Inbox
+            </button>
             <button class="nav-item">💿 Albums (TODO)</button>
             <button class="nav-item">⚙️ Settings (TODO)</button>
         </nav>
 
         <footer>
-            <button class="quick-idea">⚡️Quick idea (TODO)</button>
+            <button
+                class:recording={$audioRecorderStore.isRecording}
+                class="quick-idea"
+                type="button"
+                aria-pressed={$audioRecorderStore.isRecording}
+                disabled={isBusy}
+                on:click={toggleQuickIdeaRecording}
+            >
+                {#if $audioRecorderStore.isRecording}
+                    <span class="recording-dot" aria-hidden="true"></span>
+                    Stop and save ({formatElapsed($audioRecorderStore.secondsElapsed)})
+                {:else}
+                    ⚡ Record a Quick Idea
+                {/if}
+            </button>
         </footer>
 
         <div class="user-profile">
@@ -24,7 +128,11 @@
     </aside>
 
     <main class="content-area">
-        <slot />
+        {#if activePanel === "library"}
+            <slot />
+        {:else}
+            <QuickIdeasInbox />
+        {/if}
     </main>
 </div>
 
@@ -103,6 +211,28 @@
         cursor: pointer;
         border-radius: 4px;
         transition: background 0.2s;
+    }
+    .quick-idea:disabled {
+        cursor: wait;
+        opacity: 0.75;
+    }
+    .quick-idea.recording {
+        background-color: #a12626;
+    }
+    .quick-idea.recording:hover {
+        background-color: #c43131;
+    }
+    .recording-dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-right: 6px;
+        border-radius: 50%;
+        background: #fff;
+        animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+        50% { opacity: 0.35; }
     }
 
     .user-profile {

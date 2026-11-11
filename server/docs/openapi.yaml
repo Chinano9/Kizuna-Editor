@@ -1,0 +1,267 @@
+openapi: 3.0.3
+info:
+  title: Kizuna Cloud API
+  description: Synchronization, collaboration, and project management backend for Kizuna Editor.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Returns health status of the API server.
+      responses:
+        '200':
+          description: API is operational
+
+  /api/v1/auth/register:
+    post:
+      summary: User registration
+      description: Creates a new user account (Issue #12).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password]
+              properties:
+                username:
+                  type: string
+                  example: jimi_hendrix
+                email:
+                  type: string
+                  format: email
+                  example: jimi@guitar.com
+                password:
+                  type: string
+                  format: password
+                  minLength: 6
+                  example: secret123
+      responses:
+        '201':
+          description: User registered successfully
+        '400':
+          description: Invalid parameters
+        '409':
+          description: Email already in use
+
+  /api/v1/auth/login:
+    post:
+      summary: User login
+      description: Authenticates user credentials and returns a JWT session token (Issue #12, #20).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  example: jimi@guitar.com
+                password:
+                  type: string
+                  example: secret123
+      responses:
+        '200':
+          description: Successfully authenticated
+        '401':
+          description: Invalid credentials
+
+  /api/v1/auth/me:
+    get:
+      summary: Current user profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Authenticated user details
+        '401':
+          description: Unauthorized
+
+  /api/v1/projects:
+    get:
+      summary: List user projects
+      description: Returns all projects owned by or shared with the authenticated user.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of projects
+
+  /api/v1/projects/{id}:
+    get:
+      summary: Get project details
+      description: Retrieves complete metadata, tracks, and active checkout lock status.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Project retrieved
+        '404':
+          description: Project not found
+
+  /api/v1/projects/{id}/checkout:
+    post:
+      summary: Exclusive checkout lock
+      description: Obtains an exclusive checkout lease on a project (Issue #16).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Checkout lock acquired
+        '409':
+          description: Project locked by another user
+
+  /api/v1/projects/{id}/release:
+    post:
+      summary: Release checkout lock
+      description: Releases an active project lock (Issue #22).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Lock released successfully
+        '403':
+          description: User does not hold the lock
+
+  /api/v1/sync/push:
+    post:
+      summary: Sync push project
+      description: Uploads song project changes to the cloud with version checking (Issue #13, #23).
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                project_id:
+                  type: integer
+                  description: 0 for initial project upload, or existing project ID
+                title:
+                  type: string
+                bpm:
+                  type: integer
+                time_signature:
+                  type: string
+                base_version:
+                  type: integer
+                  description: Client's base version for optimistic concurrency
+                tracks:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Track'
+                audio_versions:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/AudioVersion'
+      responses:
+        '200':
+          description: Successfully synced or created
+        '409':
+          description: Version conflict (Issue #21) or project locked
+
+  /api/v1/sync/pull:
+    get:
+      summary: Sync pull project
+      description: Downloads the latest version of a cloud project (Issue #14).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Latest project state
+        '404':
+          description: Project not found
+
+  /api/v1/sync/diff:
+    get:
+      summary: Differential comparison
+      description: Compares client version against cloud version to detect remote changes (Issue #21).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: client_version
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Version difference summary
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Track:
+      type: object
+      properties:
+        id:
+          type: integer
+        instrument_id:
+          type: integer
+        name:
+          type: string
+        data_content:
+          type: string
+        display_mode:
+          type: string
+          enum: [BOTH, TAB, NOTATION, SCORE]
+        is_muted:
+          type: boolean
+
+    AudioVersion:
+      type: object
+      properties:
+        id:
+          type: integer
+        track_id:
+          type: integer
+          nullable: true
+        version_name:
+          type: string
+        file_path:
+          type: string
+        notes:
+          type: string

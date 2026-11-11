@@ -19,34 +19,26 @@
     */
 
     import { get } from "svelte/store";
-
     import { SaveSong } from "../../wailsjs/go/main/App";
-
     import { song, autoBar } from "../stores/projectStore";
+    import { toastStore } from "@shared/stores/toastStore";
 
     async function save() {
         const currentSong = get(song);
 
         if (!currentSong) {
-            alert("No song data to save.");
-
+            toastStore.warning("No song data to save.");
             return;
         }
 
         try {
             console.log("Saving song object:", currentSong);
-
             const updatedSong = await SaveSong(currentSong);
-
             song.set(updatedSong);
-
-            // TODO: Replace browser alert with app toast/notification for better UX
-
-            alert(`Saved successfully (ID: ${updatedSong.id})`);
+            toastStore.success(`Project saved successfully (ID: ${updatedSong.id})`);
         } catch (err) {
             console.error("Failed to save project:", err);
-
-            alert("Failed to save project.");
+            toastStore.error("Failed to save project.");
         }
     }
 </script>

@@ -1,0 +1,22 @@
+/*
+    Kizuna Editor - Hoja de Estilos Global Unificada
+*/
+
+@import "./reset.css";
+@import "./typography.css";
+@import "./lcd-tokens.css";
+
+html,
+body {
+    background-color: var(--app-bg);
+    color: var(--lcd-text);
+    font-family: var(--lcd-font-ui);
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+}
+
+#app {
+    height: 100vh;
+    width: 100%;
+}

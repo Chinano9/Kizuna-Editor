@@ -1,7 +1,2 @@
-import { writable } from 'svelte/store';
-
-// Tipos de vista permitidos
-export type ViewType = 'dashboard' | 'editor';
-
-// Por defecto arrancamos en el Dashboard
-export const currentView = writable<ViewType>('dashboard');
+/* Legacy re-export for backwards compatibility */
+export * from "@shared/stores/viewStore";

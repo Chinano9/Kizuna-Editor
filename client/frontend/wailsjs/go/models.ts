@@ -1,5 +1,116 @@
+export namespace audio {
+	
+	export class AudioDevice {
+	    id: string;
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AudioDevice(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	    }
+	}
+
+}
+
+export namespace bindings {
+	
+	export class AlbumHandler {
+	
+	
+	    static createFrom(source: any = {}) {
+	        return new AlbumHandler(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	
+	    }
+	}
+	export class AudioHandler {
+	
+	
+	    static createFrom(source: any = {}) {
+	        return new AudioHandler(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	
+	    }
+	}
+	export class SongHandler {
+	
+	
+	    static createFrom(source: any = {}) {
+	        return new SongHandler(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	
+	    }
+	}
+	export class TrackHandler {
+	
+	
+	    static createFrom(source: any = {}) {
+	        return new TrackHandler(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	
+	    }
+	}
+
+}
+
 export namespace models {
 	
+	export class Album {
+	    id: number;
+	    title: string;
+	    artist: string;
+	    description: string;
+	    // Go type: time
+	    created_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new Album(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.artist = source["artist"];
+	        this.description = source["description"];
+	        this.created_at = this.convertValues(source["created_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class AudioVersion {
 	    id: number;
 	    song_id: number;
@@ -60,6 +171,43 @@ export namespace models {
 	        this.type = source["type"];
 	        this.default_clef = source["default_clef"];
 	    }
+	}
+	export class QuickIdea {
+	    id: number;
+	    file_path: string;
+	    // Go type: time
+	    created_at: any;
+	    duration_seconds?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new QuickIdea(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.file_path = source["file_path"];
+	        this.created_at = this.convertValues(source["created_at"], null);
+	        this.duration_seconds = source["duration_seconds"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class Track {
 	    id: number;
@@ -153,25 +301,6 @@ export namespace models {
 		    }
 		    return a;
 		}
-	}
-
-}
-
-export namespace recorder {
-	
-	export class AudioDevice {
-	    id: string;
-	    name: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new AudioDevice(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	    }
 	}
 
 }

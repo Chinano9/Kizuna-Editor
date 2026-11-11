@@ -14,6 +14,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
+      "@app": path.resolve(__dirname, "src/app"),
+      "@shared": path.resolve(__dirname, "src/shared"),
+      "@features": path.resolve(__dirname, "src/features"),
+      "@wails": path.resolve(__dirname, "wailsjs"),
       wailsjs: path.resolve(__dirname, "wailsjs"),
     },
   },

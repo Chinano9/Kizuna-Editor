@@ -20,10 +20,9 @@
     import { onMount, tick } from "svelte";
 
     import { activeTrackIndex } from "@/stores/trackStore";
-
     import { song } from "@/stores/projectStore";
-
-    import type { main } from "../../wailsjs/go/models";
+    import { toastStore } from "@shared/stores/toastStore";
+    import type { Instrument, Track } from "@shared/types/wails";
 
     import {
         AddTrack,
@@ -38,13 +37,14 @@
 
     let inputElement: HTMLInputElement;
 
-    let instruments: main.Instrument[] = [];
+    let instruments: Instrument[] = [];
 
     onMount(async () => {
         try {
-            instruments = await GetInstruments();
+            instruments = (await GetInstruments()) ?? [];
         } catch (err) {
             console.error("Failed to load instruments:", err);
+            instruments = [];
         }
     });
 
@@ -71,10 +71,10 @@
             song.set($song);
 
             activeTrackIndex.set($song.tracks.length - 1);
+            toastStore.success(`Added ${newTrackName}`);
         } catch (err) {
             console.error("Failed to add track:", err);
-
-            alert("Error: Could not add a new track.");
+            toastStore.error("Could not add a new track.");
         }
     }
 
@@ -99,7 +99,7 @@
     }
 
     async function saveTrackName() {
-        if (editingIndex === null) return;
+        if (editingIndex === null || !$song || !$song.tracks) return;
 
         const trackToUpdate = $song.tracks[editingIndex];
 
@@ -113,12 +113,11 @@
 
         try {
             await UpdateTrack(trackToUpdate);
-
             song.set($song);
+            toastStore.success(`Renamed track to "${editingName}"`);
         } catch (err) {
             console.error("Failed to update track name:", err);
-
-            alert("Error saving track name.");
+            toastStore.error("Error saving track name.");
         } finally {
             cancelEditing();
         }
@@ -130,37 +129,31 @@
 
     async function deleteTrack(index: number) {
         if (!confirm("Are you sure you want to delete this track?")) return;
+        if (!$song || !$song.tracks) return;
 
         const trackToDelete = $song.tracks[index];
+        if (!trackToDelete) return;
 
         try {
             await DeleteTrack(trackToDelete.id);
-
             $song.tracks.splice(index, 1);
-
-            // Ajustar el índice activo si es necesario
-
-            if ($activeTrackIndex >= index) {
-                activeTrackIndex.set(Math.max(0, $activeTrackIndex - 1));
-            }
-
+            activeTrackIndex.clamp($song.tracks.length);
             song.set($song);
+            toastStore.success(`Deleted track "${trackToDelete.name}"`);
         } catch (err) {
             console.error("Failed to delete track:", err);
-
-            alert("Error: Could not delete the track.");
+            toastStore.error("Could not delete the track.");
         }
     }
 
-    async function handleInstrumentChange(track: main.Track) {
+    async function handleInstrumentChange(track: Track) {
         try {
             await UpdateTrack(track);
-
             song.set($song);
+            toastStore.success("Instrument updated");
         } catch (err) {
             console.error("Failed to update instrument:", err);
-
-            alert("Error saving instrument change.");
+            toastStore.error("Error saving instrument change.");
         }
     }
 </script>
