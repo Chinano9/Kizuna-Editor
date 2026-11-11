@@ -8,6 +8,8 @@
     "allowJs": true,
     "checkJs": true,
     "isolatedModules": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
