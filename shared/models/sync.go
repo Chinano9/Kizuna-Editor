@@ -39,3 +39,18 @@ type CloudPushResult struct {
 	SyncedAt   time.Time `json:"synced_at"`
 	Status     string    `json:"status"` // "created", "synced"
 }
+
+// CloudProject represents a project snapshot stored in Kizuna Cloud (Issues #13, #14).
+type CloudProject struct {
+	ID            int            `json:"id"`
+	OwnerID       string         `json:"owner_id"`
+	Title         string         `json:"title"`
+	BPM           int            `json:"bpm"`
+	TimeSignature string         `json:"time_signature"`
+	KeySignature  string         `json:"key_signature"`
+	Version       int            `json:"version"`
+	Tracks        []Track        `json:"tracks"`
+	AudioVersions []AudioVersion `json:"audio_versions"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+}

@@ -3,3 +3,5 @@
 import {models} from '../models';
 
 export function PushProjectToCloud(arg1:string,arg2:string,arg3:number,arg4:number):Promise<models.CloudPushResult>;
+
+export function PullAndImportProject(arg1:string,arg2:string,arg3:number):Promise<number>;

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onDestroy } from "svelte";
+    import { onDestroy, onMount } from "svelte";
     import {
         StartQuickIdeaRecording,
         StopQuickIdeaRecording,
@@ -8,9 +8,10 @@
     import QuickIdeasInbox from "@/features/audio-deck/components/QuickIdeasInbox.svelte";
     import { syncStore } from "@/features/cloud-sync/stores/syncStore";
     import AuthModal from "@/features/cloud-sync/components/AuthModal.svelte";
+    import CloudProjectsView from "@/features/cloud-sync/components/CloudProjectsView.svelte";
     import { toastStore } from "@shared/stores/toastStore";
 
-    let activePanel: "library" | "ideas" = "library";
+    let activePanel: "library" | "ideas" | "cloud" = "library";
     let isBusy = false;
     let timerId: ReturnType<typeof setInterval> | undefined;
     let isDestroyed = false;
@@ -81,6 +82,17 @@
         return `${minutes}:${remainingSeconds}`;
     }
 
+    onMount(() => {
+        const handleSessionExpired = () => {
+            isAuthModalOpen = true;
+            toastStore.warning("Tu sesión ha expirado. Por favor inicia sesión de nuevo.");
+        };
+        window.addEventListener("kizuna-session-expired", handleSessionExpired);
+        return () => {
+            window.removeEventListener("kizuna-session-expired", handleSessionExpired);
+        };
+    });
+
     onDestroy(() => {
         isDestroyed = true;
         clearTimer();
@@ -102,6 +114,9 @@
             </button>
             <button class="nav-item" class:active={activePanel === "ideas"} on:click={() => activePanel = "ideas"}>
                 🎙 Ideas Inbox
+            </button>
+            <button class="nav-item" class:active={activePanel === "cloud"} on:click={() => activePanel = "cloud"}>
+                ☁️ Nube
             </button>
             <button class="nav-item">💿 Albums (TODO)</button>
             <button class="nav-item">⚙️ Settings (TODO)</button>
@@ -160,8 +175,10 @@
     <main class="content-area">
         {#if activePanel === "library"}
             <slot />
-        {:else}
+        {:else if activePanel === "ideas"}
             <QuickIdeasInbox />
+        {:else if activePanel === "cloud"}
+            <CloudProjectsView onOpenAuthModal={() => (isAuthModalOpen = true)} />
         {/if}
     </main>
 

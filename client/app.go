@@ -92,6 +92,11 @@ func (a *App) PushProjectToCloud(cloudURL string, token string, songID int, base
 	return a.syncHandler.PushProjectToCloud(cloudURL, token, songID, baseVersion)
 }
 
+// PullAndImportProject downloads a cloud project and unpacks/imports it into local SQLite (Issue #14).
+func (a *App) PullAndImportProject(cloudURL string, token string, projectID int) (int, error) {
+	return a.syncHandler.PullAndImportProject(cloudURL, token, projectID)
+}
+
 // --- Song Operations (Delegated to SongHandler) ---
 
 // SaveQuickIdea persists the current editor content to the local database.

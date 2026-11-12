@@ -4,7 +4,7 @@
 */
 import { writable, get } from "svelte/store";
 import type { AuthUser, LoginPayload, RegisterPayload } from "../types/auth.ts";
-import type { CloudPushPayload, CloudPushResult } from "../types/sync.ts";
+import type { CloudPushPayload, CloudPushResult, CloudProject } from "../types/sync.ts";
 import { authApi, authStorage, DEFAULT_CLOUD_URL } from "../services/authApi.ts";
 import { syncApi } from "../services/syncApi.ts";
 import type { Song, AudioVersion } from "@shared/types/wails";
@@ -254,6 +254,80 @@ export const syncStore = {
         } catch (err) {
             internalStore.update((s) => ({ ...s, isSyncing: false }));
             throw err;
+        }
+    },
+
+    /**
+     * List user projects available in Kizuna Cloud (Issue #14)
+     */
+    listCloudProjects: async (): Promise<CloudProject[]> => {
+        const state = get(internalStore);
+        if (!state.isAuthenticated || !state.token) {
+            throw new Error("Debes iniciar sesión para consultar tus proyectos en la nube.");
+        }
+        return await syncApi.listProjects(state.token, state.cloudUrl);
+    },
+
+    /**
+     * Pull project from Kizuna Cloud and import into local SQLite (Issue #14)
+     */
+    pullAndImportProject: async (cloudProjectId: number): Promise<number> => {
+        const state = get(internalStore);
+        if (!state.isAuthenticated || !state.token) {
+            throw new Error("Debes iniciar sesión para descargar proyectos de la nube.");
+        }
+
+        internalStore.update((s) => ({ ...s, isSyncing: true }));
+
+        try {
+            let localSongId: number;
+
+            // Check if running in Wails desktop app
+            const wailsSync = typeof window !== "undefined" ? (window as any).go?.bindings?.SyncHandler || (window as any).go?.main?.App : null;
+            if (wailsSync && typeof wailsSync.PullAndImportProject === "function") {
+                localSongId = await wailsSync.PullAndImportProject(state.cloudUrl, state.token, cloudProjectId);
+            } else {
+                // Browser fallback / mock environment
+                const cp = await syncApi.pullProject(cloudProjectId, state.token, state.cloudUrl);
+                localSongId = cp.id;
+            }
+
+            // Update mapping
+            const updatedMappings = {
+                ...state.cloudProjectMappings,
+                [localSongId]: {
+                    cloudProjectId,
+                    version: 1,
+                    lastSyncedAt: new Date().toISOString(),
+                },
+            };
+            saveStoredMappings(updatedMappings);
+
+            internalStore.update((s) => ({
+                ...s,
+                isSyncing: false,
+                lastSyncedAt: new Date().toISOString(),
+                cloudProjectMappings: updatedMappings,
+            }));
+
+            return localSongId;
+        } catch (err) {
+            internalStore.update((s) => ({ ...s, isSyncing: false }));
+            throw err;
+        }
+    },
+
+    /**
+     * Handle expired session (401 Unauthorized) (Issue #20)
+     */
+    handleSessionExpired: () => {
+        syncStore.clearAuth();
+        internalStore.update((s) => ({
+            ...s,
+            authError: "Tu sesión ha expirado. Por favor inicia sesión nuevamente.",
+        }));
+        if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+            window.dispatchEvent(new CustomEvent("kizuna-session-expired"));
         }
     },
 

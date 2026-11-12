@@ -21,3 +21,17 @@ export interface CloudPushResult {
     synced_at: string;
     status: string;
 }
+
+export interface CloudProject {
+    id: number;
+    owner_id: string;
+    title: string;
+    bpm: number;
+    time_signature: string;
+    key_signature: string;
+    version: number;
+    tracks?: Track[];
+    audio_versions?: AudioVersion[];
+    created_at?: string;
+    updated_at?: string;
+}

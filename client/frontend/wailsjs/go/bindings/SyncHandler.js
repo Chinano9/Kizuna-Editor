@@ -5,3 +5,7 @@
 export function PushProjectToCloud(arg1, arg2, arg3, arg4) {
   return window['go']['bindings']['SyncHandler']['PushProjectToCloud'](arg1, arg2, arg3, arg4);
 }
+
+export function PullAndImportProject(arg1, arg2, arg3) {
+  return window['go']['bindings']['SyncHandler']['PullAndImportProject'](arg1, arg2, arg3);
+}
