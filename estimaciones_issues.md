@@ -49,10 +49,10 @@ Al contar con backend completo, UI Kit reutilizable y stores inmutables, la carg
 | **#26** | Gestión central (CRUD) de Pistas | `TrackService`, `TrackHandler`, `instRepo` | `TrackTabs.svelte`, `activeSongStore`, `trackStore.clamp` | Botón de mute, cambio de instrumento y añadir pista | 3.0 d | **0.5 d** | **Dev 5** |
 | **#27** | Cifrado Zero-Knowledge | Modelos y payloads extensibles | `src/features/cloud-sync/` | Derivación PBKDF2/AES-GCM en Web Crypto API | 5.0 d | **2.0 d** | **Dev 5** |
 | **#29** | Autoguardado silencioso del editor | Soporte concurrente WAL (no bloquea UI) | `toastStore.success`, debounce timer en `activeSongStore` | Timer de 3s sin teclear y notificación sutil | 1.5 d | **0.25 d** | **Dev 5** |
-| **#12** | Inicio de sesión | Endpoints `/api/v1/auth/*`, JWT tokens | `Modal.svelte`, `Button.svelte`, `syncStore.ts` | Formulario de Login/Registro y guardado de token | 5.0 d | **1.0 d** | **Dev 1** |
-| **#13** | Subir a la nube | Endpoint `/api/v1/sync/push` | `Button.svelte`, `toastStore`, `syncStore` | Cliente HTTP para enviar payload del proyecto | 4.0 d | **1.0 d** | **Dev 1** |
-| **#14** | Consumir de la nube | Endpoint `/api/v1/sync/pull` | `Button.svelte`, `toastStore`, `recentSongsStore` | Botón de descarga e importación a base local | 4.0 d | **1.0 d** | **Dev 1** |
-| **#20** | Ciclo de sesión | Validación JWT con expiración en `/auth/me` | `syncStore.clearAuth()`, `toastStore` | Refresh de token silencioso y cierre de sesión | 1.5 d | **0.25 d** | **Dev 1** |
+| **#12** | Inicio de sesión | Endpoints `/api/v1/auth/*`, JWT tokens | `AuthModal.svelte`, `syncStore.ts`, `authApi.ts` | ✅ **Completado**: Login/Registro, JWT en localStorage, badge usuario | 5.0 d | **0.0 d (Listo)** | **Dev 1** |
+| **#13** | Subir a la nube | Endpoint `/api/v1/sync/push` | `Toolbar.svelte`, `syncStore.ts`, `syncApi.ts` | ✅ **Completado**: Empaquetado de tracks/audio, botón Respaldar Nube | 4.0 d | **0.0 d (Listo)** | **Dev 1** |
+| **#14** | Consumir de la nube | Endpoint `/api/v1/sync/pull` | `CloudProjectsView.svelte`, `syncStore.ts` | ✅ **Completado**: Vista proyectos nube, descarga e importación SQLite | 4.0 d | **0.0 d (Listo)** | **Dev 1** |
+| **#20** | Ciclo de sesión | Interceptor 401, purga JWT | `DashboardLayout.svelte`, `syncStore.ts` | ✅ **Completado**: Logout en sidebar, intercepción 401 y re-login | 1.5 d | **0.0 d (Listo)** | **Dev 1** |
 | **#15** | Compartir proyecto | `CloudProject.OwnerID` + consulta de usuario | `Modal.svelte`, `Button.svelte`, `toastStore` | Modal para ingresar email del colaborador | 3.0 d | **0.5 d** | **Dev 2** |
 | **#16** | Check-out de proyecto | Endpoint `/api/v1/projects/{id}/checkout` | `syncStore.setLock()`, badge visual LCD | Indicador de candado en tiempo real al abrir proyecto | 3.0 d | **0.5 d** | **Dev 2** |
 | **#21** | Visualización de cambios | Endpoint `/api/v1/sync/diff` | `Modal.svelte` con comparación en dos columnas | Modal de diferencias locales vs remotas en conflicto | 3.0 d | **1.0 d** | **Dev 2** |
@@ -65,7 +65,7 @@ Al contar con backend completo, UI Kit reutilizable y stores inmutables, la carg
 
 | Desarrollador | Área de Especialidad | Issues Asignadas | Carga Inicial Monolito | Carga Post-Backend | **Carga Definitiva (Backend + Frontend Listos)** | **Ahorro Total** |
 |---|---|---|---|---|---|---|
-| **Dev 1** | Nube Base & Sesiones | #12, #13, #14, #20 | 14.5 días | 5.0 días | **3.25 días** | **-78%** |
+| **Dev 1** | Nube Base & Sesiones | #12, #13, #14, #20 | 14.5 días | 5.0 días | **0.0 d (Finalizado)** | **-100%** |
 | **Dev 2** | Colaboración & UX Nube | #15, #16, #21, #22, #23 | 15.0 días | 5.0 días | **2.75 días** | **-82%** |
 | **Dev 3** | Biblioteca, Álbumes e i18n | #6, #7, #8, #17, #18, #24 | 12.5 días | 4.5 días | **2.50 días** | **-80%** |
 | **Dev 4** | Grabación, Audio e Ideas | #9, #10, #11, #19, #28 | 14.0 días | 5.5 días | **3.25 días** | **-77%** |
@@ -76,15 +76,14 @@ Al contar con backend completo, UI Kit reutilizable y stores inmutables, la carg
 
 ## 🛠️ Guía Práctica de Trabajo por Desarrollador
 
-### 👤 Dev 1: Nube Base y Sesiones (#12, #13, #14, #20)
+### 👤 Dev 1: Nube Base y Sesiones (#12, #13, #14, #20) — ✅ 100% COMPLETADO
 * **Carpeta Exclusiva:** `src/features/cloud-sync/`
-* **Herramientas a Utilizar:**
-  * Endpoints HTTP en Go: `/api/v1/auth/*` y `/api/v1/sync/*` (documentados en `server/docs/openapi.yaml`).
-  * Store de sesión: [`src/features/cloud-sync/stores/syncStore.ts`](file:///home/raulaniles/Documentos/proyecos/kizuna-editor/client/frontend/src/features/cloud-sync/stores/syncStore.ts).
-  * UI: [`Modal.svelte`](file:///home/raulaniles/Documentos/proyecos/kizuna-editor/client/frontend/src/shared/components/ui/Modal.svelte), [`Button.svelte`](file:///home/raulaniles/Documentos/proyecos/kizuna-editor/client/frontend/src/shared/components/ui/Button.svelte) y [`toastStore`](file:///home/raulaniles/Documentos/proyecos/kizuna-editor/client/frontend/src/shared/stores/toastStore.ts).
-* **Pasos:**
-  1. Crear `AuthModal.svelte` dentro de `src/features/cloud-sync/components/` invocando `syncStore.setAuth(email, token)`.
-  2. Implementar botones en Dashboard ("Subir a la nube" / "Bajar de la nube") invocando los endpoints REST `/api/v1/sync/push` y `/api/v1/sync/pull`.
+* **Estado:** Totalmente implementado, probado y mergeado en `test`.
+* **Componentes y Servicios Entregados:**
+  1. **#12 Login & Registro:** [`AuthModal.svelte`](file:///home/raulaniles/Documentos/proyecos/kizuna-editor/client/frontend/src/features/cloud-sync/components/AuthModal.svelte), [`authApi.ts`](file:///home/raulaniles/Documentos/proyecos/kizuna-editor/client/frontend/src/features/cloud-sync/services/authApi.ts), persistencia de JWT en `localStorage` y badge de estado online/offline en barra lateral.
+  2. **#13 Subir a la nube (Push):** Empaquetado de canciones, pistas y versiones de audio en [`SyncClientService.PackageProject`](file:///home/raulaniles/Documentos/proyecos/kizuna-editor/client/internal/service/sync_client_service.go), botón "Respaldar Nube" en [`Toolbar.svelte`](file:///home/raulaniles/Documentos/proyecos/kizuna-editor/client/frontend/src/components/Toolbar.svelte) y auto-recuperación de proyecto nuevo con `project_id: 0`.
+  3. **#14 Consumir de la nube (Pull):** Vista [`CloudProjectsView.svelte`](file:///home/raulaniles/Documentos/proyecos/kizuna-editor/client/frontend/src/features/cloud-sync/components/CloudProjectsView.svelte) con listado remoto en tiempo real, botón "Descargar (Pull)" que descarga e importa atómicamente a SQLite local vía [`SyncClientService.ImportCloudProject`](file:///home/raulaniles/Documentos/proyecos/kizuna-editor/client/internal/service/sync_client_service.go) y abre el proyecto en el Editor.
+  4. **#20 Ciclo de sesión:** Botón "Salir" en barra lateral para borrado de token, más intercepción global de respuestas HTTP 401 en todas las llamadas de sincronización con reapertura inmediata del modal de login sin congelar la app.
 
 ---
 
