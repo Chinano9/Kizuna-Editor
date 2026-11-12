@@ -103,4 +103,73 @@ describe("Cloud Sync & Auth Store (Issue #12, #20)", () => {
         assert.strictEqual(authStorage.getToken(), null);
         assert.strictEqual(authStorage.getUser(), null);
     });
+
+    test("pushProject rejects when unauthenticated", async () => {
+        syncStore.clearAuth();
+        const fakeSong: any = { id: 1, title: "Test Song", bpm: 120, time_signature: "4/4" };
+
+        await assert.rejects(
+            async () => {
+                await syncStore.pushProject(fakeSong, []);
+            },
+            {
+                message: "Debes iniciar sesión en Kizuna Cloud para respaldar tu proyecto.",
+            }
+        );
+    });
+
+    test("pushProject updates projectVersions and lastSyncedAt on successful push", async () => {
+        // Authenticate
+        syncStore.setAuth({ id: "usr_1", username: "thom", email: "thom@radiohead.com" }, "mock.token");
+
+        // Mock global fetch for sync push
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+            const urlStr = String(input);
+            if (urlStr.includes("/api/v1/sync/push")) {
+                const body = JSON.parse(String(init?.body));
+                assert.strictEqual(body.title, "Karma Police");
+                assert.strictEqual(body.base_version, 0);
+
+                return {
+                    ok: true,
+                    status: 200,
+                    statusText: "OK",
+                    json: async () => ({
+                        success: true,
+                        data: {
+                            project_id: 101,
+                            new_version: 1,
+                            synced_at: "2026-11-12T03:00:00Z",
+                            status: "created",
+                        },
+                    }),
+                } as unknown as Response;
+            }
+            return originalFetch(input, init);
+        };
+
+        try {
+            const fakeSong: any = {
+                id: 101,
+                title: "Karma Police",
+                bpm: 75,
+                time_signature: "4/4",
+                key_signature: "A minor",
+                tracks: [],
+            };
+
+            const result = await syncStore.pushProject(fakeSong, []);
+            assert.strictEqual(result.project_id, 101);
+            assert.strictEqual(result.new_version, 1);
+            assert.strictEqual(result.status, "created");
+
+            const state = get(syncStore);
+            assert.strictEqual(state.isSyncing, false);
+            assert.strictEqual(state.lastSyncedAt, "2026-11-12T03:00:00Z");
+            assert.strictEqual(state.projectVersions[101], 1);
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    });
 });

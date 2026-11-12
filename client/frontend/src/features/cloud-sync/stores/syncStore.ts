@@ -1,10 +1,13 @@
 /*
     Kizuna Editor - Cloud Sync & Auth Store (Feature: Cloud Sync - Dev 1 & 2)
-    Provides reactive session state, JWT token management, and auto-persistence (Issue #12, #20).
+    Provides reactive session state, JWT token management, auto-persistence, and cloud backup (Issue #12, #13, #20).
 */
 import { writable, get } from "svelte/store";
 import type { AuthUser, LoginPayload, RegisterPayload } from "../types/auth.ts";
+import type { CloudPushPayload, CloudPushResult } from "../types/sync.ts";
 import { authApi, authStorage, DEFAULT_CLOUD_URL } from "../services/authApi.ts";
+import { syncApi } from "../services/syncApi.ts";
+import type { Song, AudioVersion } from "@shared/types/wails";
 
 export interface SyncState {
     isAuthenticated: boolean;
@@ -17,6 +20,7 @@ export interface SyncState {
     isLockedByOther: boolean;
     lockedBy: string | null;
     authError: string | null;
+    projectVersions: Record<number, number>;
 }
 
 // Rehydrate state from storage if previously logged in
@@ -35,6 +39,7 @@ const initialState: SyncState = {
     isLockedByOther: false,
     lockedBy: null,
     authError: null,
+    projectVersions: {},
 };
 
 const internalStore = writable<SyncState>(initialState);
@@ -137,6 +142,52 @@ export const syncStore = {
             // If token expired or unauthorized, clear session
             syncStore.clearAuth();
             return false;
+        }
+    },
+
+    /**
+     * Backup a complete local song (metadata, tracks, audio versions) to Kizuna Cloud (Issue #13)
+     */
+    pushProject: async (
+        song: Song,
+        audioVersions: AudioVersion[] = []
+    ): Promise<CloudPushResult> => {
+        const state = get(internalStore);
+        if (!state.isAuthenticated || !state.token) {
+            throw new Error("Debes iniciar sesión en Kizuna Cloud para respaldar tu proyecto.");
+        }
+
+        internalStore.update((s) => ({ ...s, isSyncing: true }));
+
+        const baseVersion = state.projectVersions[song.id] || 0;
+        const payload: CloudPushPayload = {
+            project_id: song.id,
+            title: song.title,
+            bpm: song.bpm,
+            time_signature: song.time_signature,
+            key_signature: song.key_signature,
+            base_version: baseVersion,
+            tracks: song.tracks || [],
+            audio_versions: audioVersions,
+        };
+
+        try {
+            const result = await syncApi.pushProject(payload, state.token, state.cloudUrl);
+
+            internalStore.update((s) => ({
+                ...s,
+                isSyncing: false,
+                lastSyncedAt: result.synced_at,
+                projectVersions: {
+                    ...s.projectVersions,
+                    [song.id]: result.new_version,
+                },
+            }));
+
+            return result;
+        } catch (err) {
+            internalStore.update((s) => ({ ...s, isSyncing: false }));
+            throw err;
         }
     },
 
