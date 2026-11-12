@@ -8,3 +8,4 @@ export * from "./services/authApi.ts";
 export * from "./services/syncApi.ts";
 export * from "./stores/syncStore.ts";
 export { default as AuthModal } from "./components/AuthModal.svelte";
+export { default as CloudProjectsView } from "./components/CloudProjectsView.svelte";

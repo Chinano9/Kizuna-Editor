@@ -19,6 +19,7 @@
     */
 
     import { get } from "svelte/store";
+    import { onMount } from "svelte";
     import { SaveSong, GetAudioVersionsForSong } from "../../wailsjs/go/main/App";
     import { song, autoBar } from "../stores/projectStore";
     import { syncStore } from "@/features/cloud-sync/stores/syncStore";
@@ -27,6 +28,17 @@
     import type { AudioVersion } from "@shared/types/wails";
 
     let isAuthModalOpen = false;
+
+    onMount(() => {
+        const handleSessionExpired = () => {
+            isAuthModalOpen = true;
+            toastStore.warning("Tu sesión ha expirado. Por favor inicia sesión de nuevo.");
+        };
+        window.addEventListener("kizuna-session-expired", handleSessionExpired);
+        return () => {
+            window.removeEventListener("kizuna-session-expired", handleSessionExpired);
+        };
+    });
 
     async function save() {
         const currentSong = get(song);

@@ -106,6 +106,10 @@ export function PlayAudio(arg1) {
   return window['go']['main']['App']['PlayAudio'](arg1);
 }
 
+export function PullAndImportProject(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PullAndImportProject'](arg1, arg2, arg3);
+}
+
 export function PushProjectToCloud(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['PushProjectToCloud'](arg1, arg2, arg3, arg4);
 }

@@ -40,3 +40,10 @@ func (h *SyncHandler) PushProjectToCloud(cloudURL string, token string, songID i
 	log.Printf("[SyncHandler] Initiating cloud backup for song ID %d to %s", songID, cloudURL)
 	return h.syncService.PushProjectToCloud(context.Background(), cloudURL, token, songID, baseVersion)
 }
+
+// PullAndImportProject downloads a cloud project and unpacks/imports it into local SQLite (Issue #14).
+func (h *SyncHandler) PullAndImportProject(cloudURL string, token string, projectID int) (int, error) {
+	log.Printf("[SyncHandler] Initiating pull and import for cloud project ID %d from %s", projectID, cloudURL)
+	_, songID, err := h.syncService.PullProjectFromCloud(context.Background(), cloudURL, token, projectID)
+	return songID, err
+}

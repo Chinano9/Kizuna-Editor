@@ -11,10 +11,14 @@ const mockLocalStorage = {
 };
 
 if (typeof (globalThis as any).window === "undefined") {
-    (globalThis as any).window = { localStorage: mockLocalStorage };
+    (globalThis as any).window = {
+        localStorage: mockLocalStorage,
+        dispatchEvent: () => true,
+    };
     (globalThis as any).localStorage = mockLocalStorage;
 } else if (!(globalThis as any).window.localStorage) {
     (globalThis as any).window.localStorage = mockLocalStorage;
+    (globalThis as any).window.dispatchEvent = () => true;
 }
 
 import { get } from "svelte/store";
@@ -242,5 +246,105 @@ describe("Cloud Sync & Auth Store (Issue #12, #20)", () => {
         } finally {
             globalThis.fetch = originalFetch;
         }
+    });
+
+    test("listCloudProjects rejects when unauthenticated", async () => {
+        syncStore.clearAuth();
+        await assert.rejects(
+            async () => {
+                await syncStore.listCloudProjects();
+            },
+            {
+                message: "Debes iniciar sesión para consultar tus proyectos en la nube.",
+            }
+        );
+    });
+
+    test("listCloudProjects returns remote projects from Kizuna Cloud", async () => {
+        syncStore.setAuth({ id: "usr_1", username: "thom", email: "thom@radiohead.com" }, "mock.token");
+
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = async (input: RequestInfo | URL) => {
+            const urlStr = String(input);
+            if (urlStr.includes("/api/v1/projects")) {
+                return {
+                    ok: true,
+                    status: 200,
+                    statusText: "OK",
+                    json: async () => ({
+                        success: true,
+                        data: [
+                            {
+                                id: 1001,
+                                title: "Paranoid Android",
+                                bpm: 82,
+                                time_signature: "4/4",
+                                version: 2,
+                            },
+                        ],
+                    }),
+                } as unknown as Response;
+            }
+            return originalFetch(input);
+        };
+
+        try {
+            const projects = await syncStore.listCloudProjects();
+            assert.strictEqual(projects.length, 1);
+            assert.strictEqual(projects[0].id, 1001);
+            assert.strictEqual(projects[0].title, "Paranoid Android");
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    });
+
+    test("pullAndImportProject downloads project and registers mapping", async () => {
+        syncStore.setAuth({ id: "usr_1", username: "thom", email: "thom@radiohead.com" }, "mock.token");
+
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = async (input: RequestInfo | URL) => {
+            const urlStr = String(input);
+            if (urlStr.includes("/api/v1/sync/pull")) {
+                return {
+                    ok: true,
+                    status: 200,
+                    statusText: "OK",
+                    json: async () => ({
+                        success: true,
+                        data: {
+                            id: 1001,
+                            title: "Creep",
+                            bpm: 92,
+                            time_signature: "4/4",
+                            version: 1,
+                            tracks: [],
+                        },
+                    }),
+                } as unknown as Response;
+            }
+            return originalFetch(input);
+        };
+
+        try {
+            const songId = await syncStore.pullAndImportProject(1001);
+            assert.strictEqual(songId, 1001);
+            const mapping = get(syncStore).cloudProjectMappings[1001];
+            assert.ok(mapping);
+            assert.strictEqual(mapping.cloudProjectId, 1001);
+        } finally {
+            globalThis.fetch = originalFetch;
+        }
+    });
+
+    test("handleSessionExpired clears auth and sets error message", () => {
+        syncStore.setAuth({ id: "usr_expired", username: "expired_user", email: "exp@kizuna.com" }, "token");
+        assert.strictEqual(get(syncStore).isAuthenticated, true);
+
+        syncStore.handleSessionExpired();
+
+        const state = get(syncStore);
+        assert.strictEqual(state.isAuthenticated, false);
+        assert.strictEqual(state.token, null);
+        assert.ok(state.authError?.includes("ha expirado"));
     });
 });

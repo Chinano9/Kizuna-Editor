@@ -155,3 +155,134 @@ func (s *SyncClientService) PushProjectToCloud(
 
 	return apiResp.Data, nil
 }
+
+// ImportCloudProject imports a pulled cloud project into local SQLite tables (Issue #14).
+func (s *SyncClientService) ImportCloudProject(ctx context.Context, cp *models.CloudProject) (int, error) {
+	if cp == nil {
+		return 0, fmt.Errorf("cloud project cannot be nil")
+	}
+
+	title := strings.TrimSpace(cp.Title)
+	if title == "" {
+		title = "Imported Cloud Project"
+	}
+
+	song := &models.Song{
+		Title:         title,
+		BPM:           cp.BPM,
+		TimeSignature: cp.TimeSignature,
+		KeySignature:  cp.KeySignature,
+	}
+	if song.BPM <= 0 {
+		song.BPM = 120
+	}
+	if song.TimeSignature == "" {
+		song.TimeSignature = "4/4"
+	}
+
+	songID, err := s.songRepo.Create(ctx, nil, song)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create local song: %w", err)
+	}
+
+	for _, tr := range cp.Tracks {
+		instID := tr.InstrumentID
+		if instID <= 0 {
+			instID = 1
+		}
+		mode := tr.DisplayMode
+		if mode == "" {
+			mode = models.DisplayModeBoth
+		}
+
+		newTrack := &models.Track{
+			SongID:       songID,
+			InstrumentID: instID,
+			Name:         tr.Name,
+			DataContent:  tr.DataContent,
+			DisplayMode:  mode,
+			IsMuted:      tr.IsMuted,
+		}
+		_, err := s.trackRepo.Create(ctx, nil, newTrack)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create local track '%s': %w", tr.Name, err)
+		}
+	}
+
+	for _, av := range cp.AudioVersions {
+		newAV := &models.AudioVersion{
+			SongID:      songID,
+			VersionName: av.VersionName,
+			FilePath:    av.FilePath,
+			Notes:       av.Notes,
+		}
+		_, _ = s.audioRepo.Create(ctx, newAV)
+	}
+
+	return songID, nil
+}
+
+// PullProjectFromCloud downloads a project from Kizuna Cloud and unpacks it into the local database (Issue #14).
+func (s *SyncClientService) PullProjectFromCloud(
+	ctx context.Context,
+	cloudURL string,
+	token string,
+	projectID int,
+) (*models.CloudProject, int, error) {
+	if strings.TrimSpace(cloudURL) == "" {
+		cloudURL = "http://localhost:8080"
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, 0, fmt.Errorf("authentication token is required to pull from Kizuna Cloud")
+	}
+	if projectID <= 0 {
+		return nil, 0, fmt.Errorf("invalid cloud project ID: %d", projectID)
+	}
+
+	endpoint := fmt.Sprintf("%s/api/v1/sync/pull?project_id=%d", strings.TrimRight(cloudURL, "/"), projectID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create pull request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to connect to Kizuna Cloud at %s: %w", cloudURL, err)
+	}
+	defer resp.Body.Close()
+
+	var apiResp struct {
+		Success bool                 `json:"success"`
+		Data    *models.CloudProject `json:"data,omitempty"`
+		Error   *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+			Details string `json:"details"`
+		} `json:"error,omitempty"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, 0, fmt.Errorf("invalid server response (HTTP %d): %w", resp.StatusCode, err)
+	}
+
+	if !apiResp.Success || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errMsg := fmt.Sprintf("sync pull rejected (HTTP %d)", resp.StatusCode)
+		if apiResp.Error != nil && apiResp.Error.Message != "" {
+			errMsg = apiResp.Error.Message
+		}
+		return nil, 0, fmt.Errorf("%s", errMsg)
+	}
+
+	if apiResp.Data == nil {
+		return nil, 0, fmt.Errorf("server returned empty data for project %d", projectID)
+	}
+
+	localSongID, err := s.ImportCloudProject(ctx, apiResp.Data)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to import cloud project into local database: %w", err)
+	}
+
+	return apiResp.Data, localSongID, nil
+}

@@ -56,6 +56,8 @@ export function PauseAudio():Promise<void>;
 
 export function PlayAudio(arg1:string):Promise<void>;
 
+export function PullAndImportProject(arg1:string,arg2:string,arg3:number):Promise<number>;
+
 export function PushProjectToCloud(arg1:string,arg2:string,arg3:number,arg4:number):Promise<models.CloudPushResult>;
 
 export function RemoveSongFromAlbum(arg1:number):Promise<void>;
