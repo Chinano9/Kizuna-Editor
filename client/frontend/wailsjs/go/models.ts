@@ -55,6 +55,18 @@ export namespace bindings {
 	
 	    }
 	}
+	export class SyncHandler {
+	
+	
+	    static createFrom(source: any = {}) {
+	        return new SyncHandler(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	
+	    }
+	}
 	export class TrackHandler {
 	
 	
@@ -134,6 +146,43 @@ export namespace models {
 	        this.file_path = source["file_path"];
 	        this.notes = source["notes"];
 	        this.created_at = this.convertValues(source["created_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CloudPushResult {
+	    project_id: number;
+	    new_version: number;
+	    // Go type: time
+	    synced_at: any;
+	    status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloudPushResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project_id = source["project_id"];
+	        this.new_version = source["new_version"];
+	        this.synced_at = this.convertValues(source["synced_at"], null);
+	        this.status = source["status"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
