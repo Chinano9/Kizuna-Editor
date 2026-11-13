@@ -36,6 +36,7 @@ type App struct {
 	trackHandler *bindings.TrackHandler
 	albumHandler *bindings.AlbumHandler
 	audioHandler *bindings.AudioHandler
+	syncHandler  *bindings.SyncHandler
 }
 
 // NewApp creates a new App application struct wiring up clean dependency injection.
@@ -48,6 +49,7 @@ func NewApp() *App {
 	trackHandler := bindings.NewTrackHandler(db.TrackService(), db.InstrumentRepository())
 	albumHandler := bindings.NewAlbumHandler(db.AlbumService())
 	audioHandler := bindings.NewAudioHandler(audioRec, audioPlay, db.AudioService(), db.QuickIdeaService())
+	syncHandler := bindings.NewSyncHandler(db.SyncClientService())
 
 	return &App{
 		db:           db,
@@ -57,6 +59,7 @@ func NewApp() *App {
 		trackHandler: trackHandler,
 		albumHandler: albumHandler,
 		audioHandler: audioHandler,
+		syncHandler:  syncHandler,
 	}
 }
 
@@ -82,6 +85,17 @@ func (a *App) SongHandler() *bindings.SongHandler   { return a.songHandler }
 func (a *App) TrackHandler() *bindings.TrackHandler { return a.trackHandler }
 func (a *App) AlbumHandler() *bindings.AlbumHandler { return a.albumHandler }
 func (a *App) AudioHandler() *bindings.AudioHandler { return a.audioHandler }
+func (a *App) SyncHandler() *bindings.SyncHandler   { return a.syncHandler }
+
+// PushProjectToCloud packages and backs up the local project to Kizuna Cloud (Issue #13).
+func (a *App) PushProjectToCloud(cloudURL string, token string, songID int, baseVersion int) (*models.CloudPushResult, error) {
+	return a.syncHandler.PushProjectToCloud(cloudURL, token, songID, baseVersion)
+}
+
+// PullAndImportProject downloads a cloud project and unpacks/imports it into local SQLite (Issue #14).
+func (a *App) PullAndImportProject(cloudURL string, token string, projectID int) (int, error) {
+	return a.syncHandler.PullAndImportProject(cloudURL, token, projectID)
+}
 
 // --- Song Operations (Delegated to SongHandler) ---
 

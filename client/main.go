@@ -51,6 +51,7 @@ func main() {
 			app.TrackHandler(),
 			app.AlbumHandler(),
 			app.AudioHandler(),
+			app.SyncHandler(),
 		},
 	})
 

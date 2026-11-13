@@ -48,6 +48,7 @@ type DBManager struct {
 	audioService               *service.AudioService
 	quickIdeaService           *service.QuickIdeaService
 	quickIdeaConversionService *service.QuickIdeaConversionService
+	syncClientService          *service.SyncClientService
 	instRepo                   repository.InstrumentRepository
 }
 
@@ -103,6 +104,7 @@ func NewDBManagerWithDB(db *sql.DB) *DBManager {
 		audioService:               service.NewAudioService(audioRepo),
 		quickIdeaService:           service.NewQuickIdeaService(db, quickIdeaRepo),
 		quickIdeaConversionService: service.NewQuickIdeaConversionService(db, songRepo, trackRepo, audioRepo, quickIdeaRepo),
+		syncClientService:          service.NewSyncClientService(songRepo, trackRepo, audioRepo),
 		instRepo:                   instRepo,
 	}
 }
@@ -113,6 +115,11 @@ func (m *DBManager) Close() error {
 		return nil
 	}
 	return m.db.Close()
+}
+
+// SyncClientService returns the underlying SyncClientService.
+func (m *DBManager) SyncClientService() *service.SyncClientService {
+	return m.syncClientService
 }
 
 // SongService returns the underlying SongService for direct access.

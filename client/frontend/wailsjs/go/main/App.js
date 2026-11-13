@@ -106,6 +106,14 @@ export function PlayAudio(arg1) {
   return window['go']['main']['App']['PlayAudio'](arg1);
 }
 
+export function PullAndImportProject(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PullAndImportProject'](arg1, arg2, arg3);
+}
+
+export function PushProjectToCloud(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['PushProjectToCloud'](arg1, arg2, arg3, arg4);
+}
+
 export function RemoveSongFromAlbum(arg1) {
   return window['go']['main']['App']['RemoveSongFromAlbum'](arg1);
 }
@@ -152,6 +160,10 @@ export function StopQuickIdeaRecording() {
 
 export function StopRecording(arg1) {
   return window['go']['main']['App']['StopRecording'](arg1);
+}
+
+export function SyncHandler() {
+  return window['go']['main']['App']['SyncHandler']();
 }
 
 export function TrackHandler() {

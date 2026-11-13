@@ -19,9 +19,26 @@
     */
 
     import { get } from "svelte/store";
-    import { SaveSong } from "../../wailsjs/go/main/App";
+    import { onMount } from "svelte";
+    import { SaveSong, GetAudioVersionsForSong } from "../../wailsjs/go/main/App";
     import { song, autoBar } from "../stores/projectStore";
+    import { syncStore } from "@/features/cloud-sync/stores/syncStore";
+    import AuthModal from "@/features/cloud-sync/components/AuthModal.svelte";
     import { toastStore } from "@shared/stores/toastStore";
+    import type { AudioVersion } from "@shared/types/wails";
+
+    let isAuthModalOpen = false;
+
+    onMount(() => {
+        const handleSessionExpired = () => {
+            isAuthModalOpen = true;
+            toastStore.warning("Tu sesión ha expirado. Por favor inicia sesión de nuevo.");
+        };
+        window.addEventListener("kizuna-session-expired", handleSessionExpired);
+        return () => {
+            window.removeEventListener("kizuna-session-expired", handleSessionExpired);
+        };
+    });
 
     async function save() {
         const currentSong = get(song);
@@ -39,6 +56,50 @@
         } catch (err) {
             console.error("Failed to save project:", err);
             toastStore.error("Failed to save project.");
+        }
+    }
+
+    async function backupToCloud() {
+        if ($syncStore.isSyncing) return;
+
+        if (!$syncStore.isAuthenticated) {
+            toastStore.warning("Inicia sesión en Kizuna Cloud antes de respaldar en la nube.");
+            isAuthModalOpen = true;
+            return;
+        }
+
+        let currentSong = get(song);
+        if (!currentSong) {
+            toastStore.warning("No hay ninguna canción activa para respaldar.");
+            return;
+        }
+
+        // Auto-save local changes if unsaved or ID is 0
+        if (currentSong.id === 0) {
+            try {
+                const saved = await SaveSong(currentSong);
+                song.set(saved);
+                currentSong = saved;
+            } catch (err) {
+                toastStore.error("Debes guardar la canción localmente antes de respaldar.");
+                return;
+            }
+        }
+
+        // Gather all takes/audio versions associated with this project
+        let audioVersions: AudioVersion[] = [];
+        try {
+            audioVersions = (await GetAudioVersionsForSong(currentSong.id)) || [];
+        } catch {
+            audioVersions = [];
+        }
+
+        try {
+            const res = await syncStore.pushProject(currentSong, audioVersions);
+            toastStore.success(`☁️ Proyecto respaldado en Kizuna Cloud (v${res.new_version})`);
+        } catch (err) {
+            console.error("Failed cloud backup:", err);
+            toastStore.error(err instanceof Error ? err.message : "Error al respaldar en la nube.");
         }
     }
 </script>
@@ -61,7 +122,23 @@
         </label>
 
         <button class="save-btn" on:click={save}>💾 Save</button>
+
+        <button
+            class="cloud-btn"
+            class:syncing={$syncStore.isSyncing}
+            disabled={$syncStore.isSyncing}
+            on:click={backupToCloud}
+            title="Respaldar este proyecto en Kizuna Cloud (Issue #13)"
+        >
+            {#if $syncStore.isSyncing}
+                ⏳ Subiendo...
+            {:else}
+                ☁️ Respaldar Nube
+            {/if}
+        </button>
     </div>
+
+    <AuthModal bind:isOpen={isAuthModalOpen} />
 </div>
 
 <style>
@@ -233,5 +310,51 @@
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: var(--lcd-amber-soft);
+    }
+
+    .cloud-btn {
+        position: relative;
+        background: radial-gradient(
+            circle at 50% 0,
+            rgba(80, 250, 123, 0.4) 0,
+            var(--lcd-button-bg) 60%
+        );
+        color: #50fa7b;
+        text-shadow:
+            0 0 3px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow-soft);
+        border: 1px solid #50fa7b;
+        padding: 4px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        box-shadow:
+            0 0 0 1px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow-soft);
+        font-family: var(--lcd-font-ui);
+        font-size: 0.9rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        transition: all 0.15s ease;
+    }
+
+    .cloud-btn:hover:not(:disabled) {
+        background: radial-gradient(
+            circle at 50% 0,
+            rgba(80, 250, 123, 0.6) 0,
+            var(--lcd-button-bg-soft) 65%
+        );
+        box-shadow: 0 0 8px rgba(80, 250, 123, 0.45);
+        transform: translateY(-1px);
+        filter: brightness(1.05);
+    }
+
+    .cloud-btn:active:not(:disabled) {
+        transform: translateY(1px);
+    }
+
+    .cloud-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
     }
 </style>
