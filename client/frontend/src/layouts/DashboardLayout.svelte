@@ -10,8 +10,9 @@
     import AuthModal from "@/features/cloud-sync/components/AuthModal.svelte";
     import CloudProjectsView from "@/features/cloud-sync/components/CloudProjectsView.svelte";
     import { toastStore } from "@shared/stores/toastStore";
+    import AlbumsView from "@/features/albums/components/AlbumsView.svelte";
 
-    let activePanel: "library" | "ideas" | "cloud" = "library";
+    let activePanel: "library" | "ideas" | "cloud" | "albums" = "library";
     let isBusy = false;
     let timerId: ReturnType<typeof setInterval> | undefined;
     let isDestroyed = false;
@@ -118,7 +119,9 @@
             <button class="nav-item" class:active={activePanel === "cloud"} on:click={() => activePanel = "cloud"}>
                 ☁️ Nube
             </button>
-            <button class="nav-item">💿 Albums (TODO)</button>
+            <button class="nav-item" class:active={activePanel === "albums"} on:click={() => activePanel = "albums"}>
+                💿 Albums
+            </button>
             <button class="nav-item">⚙️ Settings (TODO)</button>
         </nav>
 
@@ -179,6 +182,8 @@
             <QuickIdeasInbox />
         {:else if activePanel === "cloud"}
             <CloudProjectsView onOpenAuthModal={() => (isAuthModalOpen = true)} />
+        {:else if activePanel === "albums"}
+            <AlbumsView />
         {/if}
     </main>
 
