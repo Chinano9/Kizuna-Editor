@@ -1,8 +1,8 @@
 <script lang="ts">
     /*
-        Kizuna Editor - Audio Deck Workbar (Modular Orchestrator)
+        Kizuna Editor - Audio Deck Workbar (Modular Orchestrator + Score Sync)
     */
-    import { onMount, onDestroy } from "svelte";
+    import { onMount, onDestroy, createEventDispatcher } from "svelte";
     import {
         StartRecording,
         StopRecording,
@@ -21,6 +21,13 @@
     } from "@wails/go/main/App";
     import type { Track, AudioVersion, AudioDevice } from "@shared/types/wails";
     import { formatTime } from "@shared/lib/formatters";
+    import {
+        looksLikeAlphaTex,
+        parsePlayableNotesFromAlphaTex,
+        extractScoreMetadata,
+    } from "@shared/lib/musicUtils";
+    import { song } from "@/stores/projectStore";
+    import { audioPlayerStore } from "../stores/audioPlayerStore";
 
     import HardwareDeck from "./HardwareDeck.svelte";
     import SessionTimeDisplay from "./SessionTimeDisplay.svelte";
@@ -33,6 +40,11 @@
     // Props from layout
     export let songID: number;
     export let activeTrack: Track | null;
+
+    const dispatch = createEventDispatcher<{
+        playbackUpdate: { position: number; duration: number; isPlaying: boolean };
+        playStateChange: boolean;
+    }>();
 
     // --- State Machine ---
     let isRecording = false;
@@ -70,6 +82,31 @@
     let takes: AudioVersion[] = [];
     let selectedTakePath = "";
 
+    // --- Web Audio Score Synthesizer for Parallel / Standalone Score Playback ---
+    let audioCtx: AudioContext | null = null;
+    let synthStartWallTime = 0;
+    let synthStartOffset = 0;
+    let lastTriggeredEventIdx = -1;
+    let activePlaybackMode: "take" | "synth" = "take";
+
+    $: hasPlayableScore = Boolean(
+        activeTrack && looksLikeAlphaTex(activeTrack.data_content ?? ""),
+    );
+    $: scoreTimeline = parsePlayableNotesFromAlphaTex(
+        activeTrack?.data_content ?? "",
+        $song?.bpm || 120,
+    );
+
+    // Update estimated duration when in score synth mode and not playing a WAV take
+    $: if (!selectedTakePath && hasPlayableScore && !isPlaying) {
+        playbackDuration = scoreTimeline.durationSeconds;
+        audioPlayerStore.setDuration(playbackDuration);
+        audioPlayerStore.setPlaybackMode("synth");
+    } else if (selectedTakePath) {
+        audioPlayerStore.setActiveTake(selectedTakePath);
+        audioPlayerStore.setPlaybackMode("take");
+    }
+
     // 12 Equalizer bars with phase offsets
     let equalizerBars = Array.from({ length: 12 }, (_, i) => ({
         height: 0,
@@ -77,11 +114,22 @@
     }));
 
     // Time & Progress calculations
-    $: formattedTimeString = formatTime(isRecording ? secondsElapsed : Math.floor(playbackPosition));
-    $: timelineMax = isRecording ? 300 : playbackDuration > 0 ? playbackDuration : 10;
+    $: formattedTimeString = formatTime(
+        isRecording ? secondsElapsed : Math.floor(playbackPosition),
+    );
+    $: timelineMax = isRecording
+        ? 300
+        : playbackDuration > 0
+          ? playbackDuration
+          : scoreTimeline.durationSeconds > 0
+            ? scoreTimeline.durationSeconds
+            : 10;
     $: timelineProgress =
         timelineMax > 0
-            ? Math.min(100, ((isRecording ? secondsElapsed : playbackPosition) / timelineMax) * 100)
+            ? Math.min(
+                  100,
+                  ((isRecording ? secondsElapsed : playbackPosition) / timelineMax) * 100,
+              )
             : 0;
 
     // --- High-Fidelity Physics-Based VU Equalizer Polling ---
@@ -99,7 +147,10 @@
                 if (isRecording) {
                     const wavePhase = Math.sin(animationTime + bar.phase);
                     targetHeight =
-                        level * 100 * (0.35 + 0.65 * Math.abs(wavePhase)) * (0.8 + 0.2 * Math.random());
+                        level *
+                        100 *
+                        (0.35 + 0.65 * Math.abs(wavePhase)) *
+                        (0.8 + 0.2 * Math.random());
                 }
 
                 const currentHeight = bar.height;
@@ -115,8 +166,67 @@
         }
     }
 
+    function playMidiNote(midi: number, durationSecs: number) {
+        if (activeTrack?.is_muted || volume <= 0.01) return;
+        try {
+            const Ctx =
+                window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+            if (!Ctx) return;
+            if (!audioCtx) {
+                audioCtx = new Ctx();
+            }
+            if (audioCtx.state === "suspended") {
+                audioCtx.resume();
+            }
+
+            const now = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+
+            const freq = 440 * Math.pow(2, (midi - 69) / 12);
+            osc.type = "triangle";
+            osc.frequency.setValueAtTime(freq, now);
+
+            const peakGain = Math.min(0.35, Math.max(0.02, volume * 0.22));
+            const noteLen = Math.max(0.08, Math.min(durationSecs * 0.92, 2.5));
+
+            gain.gain.setValueAtTime(0.001, now);
+            gain.gain.linearRampToValueAtTime(peakGain, now + 0.015);
+            gain.gain.exponentialRampToValueAtTime(0.0008, now + noteLen);
+
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            osc.start(now);
+            osc.stop(now + noteLen + 0.02);
+        } catch {
+            // Ignore Web Audio errors in headless environments
+        }
+    }
+
+    function triggerScheduledNotesUpTo(prevTime: number, currentTime: number) {
+        const events = scoreTimeline.events;
+        for (let i = 0; i < events.length; i++) {
+            const ev = events[i];
+            if (
+                i > lastTriggeredEventIdx &&
+                ev.startTimeSeconds >= prevTime - 0.02 &&
+                ev.startTimeSeconds <= currentTime + 0.02
+            ) {
+                lastTriggeredEventIdx = i;
+                for (const midi of ev.midiNotes) {
+                    playMidiNote(midi, ev.durationSeconds);
+                }
+            }
+        }
+    }
+
     // --- Life Cycle ---
     onMount(async () => {
+        audioPlayerStore.registerSeekHandler(seekToSeconds);
+        audioPlayerStore.registerTogglePlayHandler(togglePlay);
+        audioPlayerStore.setVolume(volume);
+
         await loadDrivers();
         await loadDevices();
         await loadTakes();
@@ -169,12 +279,19 @@
                 if (!exists) {
                     selectedTakePath = takes[0].file_path;
                 }
+                audioPlayerStore.setActiveTake(selectedTakePath);
             } else {
                 selectedTakePath = "";
+                audioPlayerStore.setActiveTake("");
             }
         } catch (err) {
             console.error("Failed to query song takes:", err);
         }
+    }
+
+    // Reload takes when songID changes
+    $: if (songID) {
+        loadTakes();
     }
 
     // --- Recording Control ---
@@ -188,7 +305,7 @@
                 await StartRecording(
                     songID,
                     activeTrack ? activeTrack.name : "Global Sound",
-                    selectedDeviceID
+                    selectedDeviceID,
                 );
                 isRecording = true;
                 secondsElapsed = 0;
@@ -221,40 +338,105 @@
         }
     }
 
-    // --- Playback Controls ---
+    function notifyPlaybackSync() {
+        audioPlayerStore.setPosition(playbackPosition);
+        audioPlayerStore.setDuration(playbackDuration);
+        audioPlayerStore.setPlaying(isPlaying, !isPlaying && playbackPosition > 0);
+        dispatch("playbackUpdate", {
+            position: playbackPosition,
+            duration: playbackDuration,
+            isPlaying,
+        });
+    }
+
+    // --- Playback Controls (Synchronized Take + AlphaTex Score Playback) ---
     async function togglePlay() {
-        if (!selectedTakePath) return;
+        if (!selectedTakePath && !hasPlayableScore) return;
 
         try {
             if (!isPlaying) {
-                await PlayAudio(selectedTakePath);
-                const dur = await GetPlaybackDuration();
-                playbackDuration = dur;
-                isPlaying = true;
+                if (selectedTakePath) {
+                    activePlaybackMode = "take";
+                    audioPlayerStore.setPlaybackMode("take");
+                    await PlayAudio(selectedTakePath);
+                    const dur = await GetPlaybackDuration();
+                    playbackDuration =
+                        dur > 0 ? dur : Math.max(scoreTimeline.durationSeconds, 1);
+                    isPlaying = true;
+                    dispatch("playStateChange", true);
+                    notifyPlaybackSync();
 
-                if (playbackIntervalId) clearInterval(playbackIntervalId);
-                playbackIntervalId = setInterval(async () => {
-                    if (isPlaying && !isSeeking) {
-                        try {
-                            const pos = await GetPlaybackPosition();
-                            if (!isSeeking) {
-                                playbackPosition = pos;
-                                if (pos >= playbackDuration - 0.05 && playbackDuration > 0) {
-                                    stopPlayback();
+                    if (playbackIntervalId) clearInterval(playbackIntervalId);
+                    playbackIntervalId = setInterval(async () => {
+                        if (isPlaying && !isSeeking) {
+                            try {
+                                const pos = await GetPlaybackPosition();
+                                if (!isSeeking) {
+                                    playbackPosition = pos;
+                                    notifyPlaybackSync();
+                                    if (
+                                        pos >= playbackDuration - 0.05 &&
+                                        playbackDuration > 0
+                                    ) {
+                                        stopPlayback();
+                                    }
                                 }
+                            } catch (e) {
+                                console.error(e);
                             }
-                        } catch (e) {
-                            console.error(e);
+                        }
+                    }, 30);
+                } else {
+                    // Score Synth Playback Mode (no WAV take required)
+                    activePlaybackMode = "synth";
+                    audioPlayerStore.setPlaybackMode("synth");
+                    playbackDuration = Math.max(scoreTimeline.durationSeconds, 2);
+                    if (playbackPosition >= playbackDuration - 0.05) {
+                        playbackPosition = 0;
+                    }
+                    synthStartOffset = playbackPosition;
+                    synthStartWallTime = performance.now();
+                    lastTriggeredEventIdx = -1;
+                    for (let i = 0; i < scoreTimeline.events.length; i++) {
+                        if (scoreTimeline.events[i].startTimeSeconds < synthStartOffset - 0.02) {
+                            lastTriggeredEventIdx = i;
                         }
                     }
-                }, 30);
+
+                    isPlaying = true;
+                    dispatch("playStateChange", true);
+                    notifyPlaybackSync();
+                    triggerScheduledNotesUpTo(synthStartOffset, synthStartOffset);
+
+                    if (playbackIntervalId) clearInterval(playbackIntervalId);
+                    playbackIntervalId = setInterval(() => {
+                        if (isPlaying && !isSeeking) {
+                            const prevPos = playbackPosition;
+                            const elapsed = (performance.now() - synthStartWallTime) / 1000;
+                            const nextPos = synthStartOffset + elapsed;
+
+                            if (nextPos >= playbackDuration) {
+                                stopPlayback();
+                                return;
+                            }
+
+                            playbackPosition = nextPos;
+                            triggerScheduledNotesUpTo(prevPos, nextPos);
+                            notifyPlaybackSync();
+                        }
+                    }, 30);
+                }
             } else {
-                await PauseAudio();
+                if (activePlaybackMode === "take" && selectedTakePath) {
+                    await PauseAudio();
+                }
                 isPlaying = false;
                 if (playbackIntervalId) {
                     clearInterval(playbackIntervalId);
                     playbackIntervalId = null;
                 }
+                dispatch("playStateChange", false);
+                notifyPlaybackSync();
             }
         } catch (err) {
             console.error("Playback transport call failed:", err);
@@ -264,31 +446,53 @@
     function stopPlayback() {
         isPlaying = false;
         playbackPosition = 0.0;
+        lastTriggeredEventIdx = -1;
         if (playbackIntervalId) {
             clearInterval(playbackIntervalId);
             playbackIntervalId = null;
         }
+        dispatch("playStateChange", false);
+        notifyPlaybackSync();
+    }
+
+    async function seekToSeconds(targetSecs: number) {
+        const clamped = Math.max(0, Math.min(timelineMax, targetSecs));
+        playbackPosition = clamped;
+        synthStartOffset = clamped;
+        synthStartWallTime = performance.now();
+        lastTriggeredEventIdx = -1;
+        for (let i = 0; i < scoreTimeline.events.length; i++) {
+            if (scoreTimeline.events[i].startTimeSeconds < clamped - 0.02) {
+                lastTriggeredEventIdx = i;
+            }
+        }
+
+        if (selectedTakePath && activePlaybackMode === "take") {
+            try {
+                await SeekAudio(clamped);
+            } catch (err) {
+                console.error("Seek action failed:", err);
+            }
+        }
+        notifyPlaybackSync();
     }
 
     function handleSeekInput(e: CustomEvent<number>) {
         isSeeking = true;
         playbackPosition = e.detail;
+        audioPlayerStore.setPosition(playbackPosition);
     }
 
     async function handleSeekChange(e: CustomEvent<number>) {
         const targetSecs = e.detail;
-        playbackPosition = targetSecs;
-        try {
-            await SeekAudio(targetSecs);
-        } catch (err) {
-            console.error("Seek action failed:", err);
-        }
+        await seekToSeconds(targetSecs);
         isSeeking = false;
     }
 
     async function handleVolumeChange(e: CustomEvent<number>) {
         const vol = e.detail;
         volume = vol;
+        audioPlayerStore.setVolume(vol);
         try {
             await SetAudioVolume(vol);
         } catch (err) {
@@ -300,6 +504,11 @@
         if (timerId) clearInterval(timerId);
         if (vuIntervalId) clearInterval(vuIntervalId);
         if (playbackIntervalId) clearInterval(playbackIntervalId);
+        audioPlayerStore.registerSeekHandler(null);
+        audioPlayerStore.registerTogglePlayHandler(null);
+        if (audioCtx && audioCtx.state !== "closed") {
+            audioCtx.close().catch(() => {});
+        }
     });
 </script>
 
@@ -326,7 +535,7 @@
         <TransportControls
             {isRecording}
             {isPlaying}
-            hasSelectedTake={!!selectedTakePath}
+            hasSelectedTake={!!selectedTakePath || hasPlayableScore}
             on:togglePlay={togglePlay}
             on:toggleRecord={toggleRecording}
         />
@@ -341,12 +550,12 @@
                 bind:selectedTakePath
                 {isRecording}
                 {isPlaying}
-                on:changeTake={(e) => (selectedTakePath = e.detail)}
+                on:changeTake={(e) => {
+                    selectedTakePath = e.detail;
+                    audioPlayerStore.setActiveTake(selectedTakePath);
+                }}
             />
-            <VolumeSlider
-                {volume}
-                on:volumeChange={handleVolumeChange}
-            />
+            <VolumeSlider {volume} on:volumeChange={handleVolumeChange} />
             <div class="panel-screw top-right"></div>
             <div class="panel-screw bottom-right"></div>
         </div>
@@ -357,7 +566,7 @@
         {timelineProgress}
         {timelineMax}
         currentPosition={isRecording ? secondsElapsed : playbackPosition}
-        disabled={isRecording || !selectedTakePath}
+        disabled={isRecording || (!selectedTakePath && !hasPlayableScore)}
         on:seekInput={handleSeekInput}
         on:seekChange={handleSeekChange}
     />
@@ -426,6 +635,12 @@
         opacity: 0.85;
     }
 
-    .top-right { top: 0px; right: 5px; }
-    .bottom-right { bottom: 2px; right: 5px; }
+    .top-right {
+        top: 0px;
+        right: 5px;
+    }
+    .bottom-right {
+        bottom: 2px;
+        right: 5px;
+    }
 </style>
