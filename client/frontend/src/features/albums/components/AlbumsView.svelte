@@ -1,7 +1,11 @@
 
 <script lang="ts">
-    import { onMount } from "svelte";
-    import { CreateAlbum, ListAlbums } from "@wails/go/bindings/AlbumHandler";
+    import { onMount, onDestroy } from "svelte";
+    import { CreateAlbum, GetAlbumSongs, ListAlbums } from "@wails/go/bindings/AlbumHandler";
+    import type { models } from "@wails/go/models";
+    import type { AlbumData } from "../stores/albumStore";
+    import { songId } from "@/stores/projectStore";
+    import { currentView } from "@/stores/viewStore";
     import { albumStore } from "../stores/albumStore";
     import { toastStore } from "@shared/stores/toastStore";
 
@@ -13,9 +17,56 @@
     let artist = "";
     let description = "";
 
+    let selectedAlbum: AlbumData | null = null;
+    let albumSongs: models.Song[] = [];
+    let isLoadingSongs = false;
+    let albumSongsError = "";
+    let songsRequestId = 0;
+
     onMount(() => {
         void loadAlbums();
     });
+
+    onDestroy(() => {
+        // Ignore pending SQLite responses if this screen is unmounted.
+        songsRequestId++;
+    });
+
+    async function openAlbum(album: AlbumData) {
+        selectedAlbum = album;
+        albumSongs = [];
+        albumSongsError = "";
+        isLoadingSongs = true;
+        // Each click starts a new request; stale responses must not overwrite the view.
+        const requestId = ++songsRequestId;
+
+        try {
+            const songs = (await GetAlbumSongs(album.id)) ?? [];
+            if (requestId !== songsRequestId) return;
+            albumSongs = songs;
+        } catch (error) {
+            if (requestId !== songsRequestId) return;
+            console.error(`[AlbumsView] Error loading songs for album ${album.id}:`, error);
+            albumSongsError = "No se pudieron cargar las canciones de este álbum.";
+            toastStore.error(albumSongsError);
+        } finally {
+            if (requestId === songsRequestId) isLoadingSongs = false;
+        }
+    }
+
+    function backToAlbums() {
+        songsRequestId++;
+        selectedAlbum = null;
+        albumSongs = [];
+        albumSongsError = "";
+        isLoadingSongs = false;
+    }
+
+    function openSong(songToOpen: models.Song) {
+        // Same navigation mechanism already used by Dashboard.svelte.
+        songId.set(songToOpen.id);
+        currentView.set("editor");
+    }
 
     async function loadAlbums() {
         isLoading = true;
@@ -74,35 +125,78 @@
 </script>
 
 <section class="albums-view">
-    <header class="albums-header">
-        <div>
-            <h1>Álbumes</h1>
-            <p>Organiza tus proyectos musicales.</p>
-        </div>
+    {#if selectedAlbum}
+        <header class="albums-header album-detail-header">
+            <div>
+                <button type="button" class="back-button" on:click={backToAlbums}>← Volver a álbumes</button>
+                <h1>{selectedAlbum.title}</h1>
+                <p>{selectedAlbum.artist || "Artista sin definir"}</p>
+                {#if selectedAlbum.description}
+                    <p class="album-description">{selectedAlbum.description}</p>
+                {/if}
+            </div>
+        </header>
 
-        <button type="button" class="primary-button" on:click={openModal}>+ Nuevo álbum</button>
-    </header>
-
-    {#if isLoading}
-        <p class="status-text">Cargando álbumes...</p>
-    {:else if $albumStore.length === 0}
-        <div class="empty-state">
-            <div class="empty-icon">💿</div>
-            <h2>Aún no tienes álbumes</h2>
-            <p>Crea tu primer álbum para comenzar.</p>
-            <button type="button" class="primary-button" on:click={openModal}>Crear álbum</button>
-        </div>
+        {#if isLoadingSongs}
+            <p class="status-text">Cargando canciones del álbum...</p>
+        {:else if albumSongsError}
+            <div class="empty-state">
+                <h2>No se pudieron cargar las canciones</h2>
+                <p>{albumSongsError}</p>
+                <button type="button" class="primary-button" on:click={() => selectedAlbum && openAlbum(selectedAlbum)}>Reintentar</button>
+            </div>
+        {:else if albumSongs.length === 0}
+            <div class="empty-state">
+                <div class="empty-icon">🎵</div>
+                <h2>Este álbum está vacío</h2>
+                <p>Asigna una canción a este álbum desde el editor para verla aquí.</p>
+            </div>
+        {:else}
+            <p class="song-count">{albumSongs.length} {albumSongs.length === 1 ? "canción" : "canciones"}</p>
+            <div class="song-grid">
+                {#each albumSongs as albumSong (albumSong.id)}
+                    <button type="button" class="song-card" on:click={() => openSong(albumSong)}>
+                        <span class="song-icon" aria-hidden="true">🎵</span>
+                        <span class="song-info">
+                            <strong>{albumSong.title}</strong>
+                            <small>{albumSong.bpm} BPM</small>
+                        </span>
+                        <span class="song-arrow" aria-hidden="true">›</span>
+                    </button>
+                {/each}
+            </div>
+        {/if}
     {:else}
-        <div class="album-grid">
-            {#each $albumStore as album (album.id)}
-                <article class="album-card">
-                    <div class="album-cover">💿</div>
-                    <h3>{album.title}</h3>
-                    <p>{album.artist || "Artista sin definir"}</p>
-                    <span class="album-info">Álbum creado</span>
-                </article>
-            {/each}
-        </div>
+        <header class="albums-header">
+            <div>
+                <h1>Álbumes</h1>
+                <p>Organiza tus proyectos musicales.</p>
+            </div>
+
+            <button type="button" class="primary-button" on:click={openModal}>+ Nuevo álbum</button>
+        </header>
+
+        {#if isLoading}
+            <p class="status-text">Cargando álbumes...</p>
+        {:else if $albumStore.length === 0}
+            <div class="empty-state">
+                <div class="empty-icon">💿</div>
+                <h2>Aún no tienes álbumes</h2>
+                <p>Crea tu primer álbum para comenzar.</p>
+                <button type="button" class="primary-button" on:click={openModal}>Crear álbum</button>
+            </div>
+        {:else}
+            <div class="album-grid">
+                {#each $albumStore as album (album.id)}
+                    <button type="button" class="album-card" on:click={() => openAlbum(album)}>
+                        <div class="album-cover" aria-hidden="true">💿</div>
+                        <h3>{album.title}</h3>
+                        <p>{album.artist || "Artista sin definir"}</p>
+                        <span class="album-info">Abrir álbum</span>
+                    </button>
+                {/each}
+            </div>
+        {/if}
     {/if}
 </section>
 
@@ -198,11 +292,28 @@
     }
 
     .album-card {
+        display: block;
+        width: 100%;
         min-width: 0;
         padding: 14px;
         background: #17211e;
         border: 1px solid #35483d;
         border-radius: 9px;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+        transition: border-color 0.15s, transform 0.15s;
+    }
+
+    .album-card:hover {
+        border-color: #b8ec9a;
+        transform: translateY(-2px);
+    }
+
+    .album-card:focus-visible, .song-card:focus-visible, .back-button:focus-visible {
+        outline: 2px solid #b8ec9a;
+        outline-offset: 3px;
     }
 
     .album-cover {
@@ -230,6 +341,84 @@
         margin-top: 12px;
         font-size: 0.8rem;
         color: #81968a;
+    }
+
+    .back-button {
+        margin: 0 0 20px;
+        padding: 0;
+        border: none;
+        background: none;
+        color: #b8ec9a;
+        font: inherit;
+        cursor: pointer;
+    }
+
+    .back-button:hover {
+        text-decoration: underline;
+    }
+
+    .album-description {
+        max-width: 700px;
+        overflow-wrap: anywhere;
+    }
+
+    .song-count {
+        margin: 0 0 18px;
+        color: #a0ada5;
+        font-size: 0.85rem;
+    }
+
+    .song-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
+        gap: 14px;
+    }
+
+    .song-card {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        min-width: 0;
+        gap: 14px;
+        padding: 17px;
+        border: 1px solid #35483d;
+        border-radius: 9px;
+        background: #17211e;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+        transition: border-color 0.15s;
+    }
+
+    .song-card:hover {
+        border-color: #b8ec9a;
+    }
+
+    .song-icon {
+        flex: none;
+        font-size: 1.6rem;
+    }
+
+    .song-info {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+    }
+
+    .song-info strong {
+        overflow-wrap: anywhere;
+    }
+
+    .song-info small {
+        color: #a0ada5;
+    }
+
+    .song-arrow {
+        color: #a0ada5;
+        font-size: 1.6rem;
     }
 
     .empty-state {
