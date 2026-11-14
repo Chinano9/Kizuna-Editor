@@ -66,6 +66,9 @@ func NewApp() *App {
 // startup is called by Wails when the application boots up.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if a.syncHandler != nil {
+		a.syncHandler.SetContext(ctx)
+	}
 	log.Println("Kizuna Editor started successfully")
 }
 

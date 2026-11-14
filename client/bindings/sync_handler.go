@@ -28,23 +28,40 @@ import (
 // SyncHandler provides Wails presentation facade for cloud backup and synchronization (Issue #13).
 type SyncHandler struct {
 	syncService *service.SyncClientService
+	ctx         context.Context
 }
 
 // NewSyncHandler instantiates a SyncHandler.
 func NewSyncHandler(syncService *service.SyncClientService) *SyncHandler {
-	return &SyncHandler{syncService: syncService}
+	return &SyncHandler{
+		syncService: syncService,
+		ctx:         context.Background(),
+	}
+}
+
+// SetContext assigns the Wails application context to enable desktop runtime event emission (Issue #23).
+func (h *SyncHandler) SetContext(ctx context.Context) {
+	h.ctx = ctx
 }
 
 // PushProjectToCloud packages local project metadata, tracks, and audio takes, and uploads them to Kizuna Cloud (Issue #13).
 func (h *SyncHandler) PushProjectToCloud(cloudURL string, token string, songID int, baseVersion int) (*models.CloudPushResult, error) {
 	log.Printf("[SyncHandler] Initiating cloud backup for song ID %d to %s", songID, cloudURL)
-	return h.syncService.PushProjectToCloud(context.Background(), cloudURL, token, songID, baseVersion)
+	ctx := h.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return h.syncService.PushProjectToCloud(ctx, cloudURL, token, songID, baseVersion)
 }
 
 // PullAndImportProject downloads a cloud project and unpacks/imports it into local SQLite (Issue #14).
 func (h *SyncHandler) PullAndImportProject(cloudURL string, token string, projectID int) (int, error) {
 	log.Printf("[SyncHandler] Initiating pull and import for cloud project ID %d from %s", projectID, cloudURL)
-	_, songID, err := h.syncService.PullProjectFromCloud(context.Background(), cloudURL, token, projectID)
+	ctx := h.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_, songID, err := h.syncService.PullProjectFromCloud(ctx, cloudURL, token, projectID)
 	return songID, err
 }
 

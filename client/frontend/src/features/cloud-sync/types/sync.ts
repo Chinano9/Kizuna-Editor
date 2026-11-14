@@ -41,3 +41,21 @@ export interface CloudProject {
     created_at?: string;
     updated_at?: string;
 }
+
+export interface SyncProgressPayload {
+    operation: "push" | "pull";
+    bytes_transferred: number;
+    total_bytes: number;
+    percentage: number;
+    phase: "transferring" | "retrying" | "completed" | "failed";
+    attempt: number;
+    max_attempts: number;
+}
+
+export interface SyncRetryPayload {
+    operation: "push" | "pull";
+    attempt: number;
+    max_attempts: number;
+    wait_seconds: number;
+    reason: string;
+}

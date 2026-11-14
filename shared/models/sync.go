@@ -81,3 +81,23 @@ type CloudProject struct {
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
 }
+
+// SyncProgressPayload encapsulates real-time byte transfer progress emitted to Wails (Issue #23).
+type SyncProgressPayload struct {
+	Operation        string  `json:"operation"`         // "push" | "pull"
+	BytesTransferred int64   `json:"bytes_transferred"`
+	TotalBytes       int64   `json:"total_bytes"`       // -1 if unknown
+	Percentage       float64 `json:"percentage"`        // 0.0 to 100.0
+	Phase            string  `json:"phase"`             // "transferring" | "retrying" | "completed" | "failed"
+	Attempt          int     `json:"attempt"`
+	MaxAttempts      int     `json:"max_attempts"`
+}
+
+// SyncRetryPayload notifies the frontend of an unstable connection and scheduled retry backoff (Issue #23).
+type SyncRetryPayload struct {
+	Operation   string `json:"operation"`
+	Attempt     int    `json:"attempt"`
+	MaxAttempts int    `json:"max_attempts"`
+	WaitSeconds int    `json:"wait_seconds"`
+	Reason      string `json:"reason"`
+}

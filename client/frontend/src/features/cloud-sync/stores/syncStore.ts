@@ -4,7 +4,7 @@
 */
 import { writable, get } from "svelte/store";
 import type { AuthUser, LoginPayload, RegisterPayload } from "../types/auth.ts";
-import type { CloudPushPayload, CloudPushResult, CloudProject } from "../types/sync.ts";
+import type { CloudPushPayload, CloudPushResult, CloudProject, SyncProgressPayload, SyncRetryPayload } from "../types/sync.ts";
 import { authApi, authStorage, DEFAULT_CLOUD_URL } from "../services/authApi.ts";
 import { syncApi } from "../services/syncApi.ts";
 import type { Song, AudioVersion } from "@shared/types/wails";
@@ -22,6 +22,7 @@ export interface SyncState {
     token: string | null;
     cloudUrl: string;
     isSyncing: boolean;
+    syncProgress: SyncProgressPayload | null;
     lastSyncedAt: string | null;
     isLockedByOther: boolean;
     lockedBy: string | null;
@@ -68,6 +69,7 @@ const initialState: SyncState = {
     token: persistedToken,
     cloudUrl: persistedUrl || DEFAULT_CLOUD_URL,
     isSyncing: false,
+    syncProgress: null,
     lastSyncedAt: null,
     isLockedByOther: false,
     lockedBy: null,
@@ -210,11 +212,11 @@ export const syncStore = {
 
         try {
             let result: CloudPushResult;
+            // Check if running in Wails desktop app
             const wailsSync =
                 typeof window !== "undefined"
                     ? (window as any).go?.bindings?.SyncHandler || (window as any).go?.main?.App
                     : null;
-
             if (wailsSync && typeof wailsSync.PushProjectToCloud === "function") {
                 result = await wailsSync.PushProjectToCloud(
                     state.cloudUrl,
@@ -354,6 +356,9 @@ export const syncStore = {
 
     setSyncing: (isSyncing: boolean) =>
         internalStore.update((s) => ({ ...s, isSyncing })),
+
+    setProgress: (progress: SyncProgressPayload | null) =>
+        internalStore.update((s) => ({ ...s, syncProgress: progress })),
 
     setLock: (isLocked: boolean, lockedBy: string | null) =>
         internalStore.update((s) => ({ ...s, isLockedByOther: isLocked, lockedBy })),

@@ -22,33 +22,139 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"kizuna/client/internal/audio"
 	"kizuna/client/internal/crypto"
 	"kizuna/client/internal/repository"
 	"kizuna/shared/models"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// EventEmitter defines an abstraction to send events to the frontend (Wails or test mocks).
+type EventEmitter func(ctx context.Context, eventName string, data ...interface{})
+
+// defaultEventEmitter emits events via Wails runtime only when the context contains the Wails frontend/events engine.
+func defaultEventEmitter(ctx context.Context, eventName string, data ...interface{}) {
+	if ctx == nil {
+		return
+	}
+	// Check if this context has Wails events runtime injected (prevents log.Fatalf in non-Wails contexts / tests)
+	if ctx.Value("events") == nil {
+		return
+	}
+	wailsRuntime.EventsEmit(ctx, eventName, data...)
+}
+
+// progressReader counts transferred bytes and emits progress payloads.
+type progressReader struct {
+	reader        io.Reader
+	ctx           context.Context
+	operation     string
+	totalBytes    int64
+	transferred   int64
+	attempt       int
+	maxAttempts   int
+	emitter       EventEmitter
+	mu            sync.Mutex
+	lastEmitTime  time.Time
+	throttleDelay time.Duration
+}
+
+func newProgressReader(
+	ctx context.Context,
+	reader io.Reader,
+	operation string,
+	totalBytes int64,
+	attempt int,
+	maxAttempts int,
+	emitter EventEmitter,
+) *progressReader {
+	return &progressReader{
+		reader:        reader,
+		ctx:           ctx,
+		operation:     operation,
+		totalBytes:    totalBytes,
+		attempt:       attempt,
+		maxAttempts:   maxAttempts,
+		emitter:       emitter,
+		throttleDelay: 50 * time.Millisecond,
+	}
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	if n > 0 {
+		pr.mu.Lock()
+		pr.transferred += int64(n)
+		current := pr.transferred
+		total := pr.totalBytes
+		now := time.Now()
+		shouldEmit := now.Sub(pr.lastEmitTime) >= pr.throttleDelay || (total > 0 && current >= total) || err == io.EOF
+		if shouldEmit {
+			pr.lastEmitTime = now
+		}
+		pr.mu.Unlock()
+
+		if shouldEmit {
+			var percentage float64
+			if total > 0 {
+				percentage = float64(current) / float64(total) * 100.0
+				if percentage > 100.0 {
+					percentage = 100.0
+				}
+			}
+			phase := "transferring"
+			if total > 0 && current >= total {
+				phase = "completed"
+			}
+			pr.emitProgress(phase, current, total, percentage)
+		}
+	}
+	return n, err
+}
+
+func (pr *progressReader) emitProgress(phase string, current, total int64, percentage float64) {
+	if pr.emitter == nil || pr.ctx == nil {
+		return
+	}
+	payload := models.SyncProgressPayload{
+		Operation:        pr.operation,
+		BytesTransferred: current,
+		TotalBytes:       total,
+		Percentage:       percentage,
+		Phase:            phase,
+		Attempt:          pr.attempt,
+		MaxAttempts:      pr.maxAttempts,
+	}
+	pr.emitter(pr.ctx, "sync:progress", payload)
+}
 
 const MaskedCloudTitle = "[E2EE] Encrypted Project"
 
-// SyncClientService coordinates local project packaging, E2EE encryption/decryption, and cloud synchronization (Issues #13, #14).
+// SyncClientService coordinates local project packaging, E2EE encryption/decryption, cloud synchronization, and resilient retries (Issues #13, #14, #23).
 type SyncClientService struct {
 	songRepo      repository.SongRepository
 	trackRepo     repository.TrackRepository
 	audioRepo     repository.AudioRepository
 	client        *http.Client
+	retryDelays   []time.Duration
+	eventEmitter  EventEmitter
 	mu            sync.RWMutex
 	encryptionKey []byte
 	cloudIDMap    map[int]int
 }
 
-// NewSyncClientService instantiates a SyncClientService with HTTP client timeout and local E2EE key.
+// NewSyncClientService instantiates a SyncClientService with HTTP client timeout, exponential backoff, and local E2EE key.
 func NewSyncClientService(
 	songRepo repository.SongRepository,
 	trackRepo repository.TrackRepository,
@@ -69,7 +175,123 @@ func NewSyncClientService(
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		retryDelays:  []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second},
+		eventEmitter: defaultEventEmitter,
 	}
+}
+
+// SetEventEmitter overrides the event emitter (useful for unit testing).
+func (s *SyncClientService) SetEventEmitter(emitter EventEmitter) {
+	s.eventEmitter = emitter
+}
+
+// SetRetryDelays overrides the retry backoff duration array (useful for fast unit testing).
+func (s *SyncClientService) SetRetryDelays(delays []time.Duration) {
+	s.retryDelays = delays
+}
+
+// isTemporaryNetworkError determines if an error should trigger an exponential backoff retry.
+func isTemporaryNetworkError(err error, statusCode int) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+			return true
+		}
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return true
+		}
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "connection reset") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "broken pipe") ||
+			strings.Contains(errStr, "eof") {
+			return true
+		}
+	}
+
+	// Transient HTTP status codes
+	if statusCode == http.StatusBadGateway ||
+		statusCode == http.StatusServiceUnavailable ||
+		statusCode == http.StatusGatewayTimeout ||
+		statusCode == http.StatusRequestTimeout {
+		return true
+	}
+
+	return false
+}
+
+// doWithRetry executes an HTTP request operation with exponential backoff and progress tracking (Issue #23).
+func (s *SyncClientService) doWithRetry(
+	ctx context.Context,
+	operation string,
+	requestFactory func(attempt int, maxAttempts int) (*http.Request, *progressReader, error),
+) (*http.Response, *progressReader, error) {
+	maxAttempts := len(s.retryDelays)
+	if maxAttempts == 0 {
+		maxAttempts = 1
+	}
+
+	var lastErr error
+	var lastStatus int
+
+	for i := 0; i < maxAttempts; i++ {
+		attempt := i + 1
+		req, pr, err := requestFactory(attempt, maxAttempts)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to build request (attempt %d): %w", attempt, err)
+		}
+
+		resp, err := s.client.Do(req)
+		if err == nil && !isTemporaryNetworkError(nil, resp.StatusCode) {
+			return resp, pr, nil
+		}
+
+		if resp != nil {
+			lastStatus = resp.StatusCode
+			_ = resp.Body.Close()
+		}
+		lastErr = err
+
+		// Check if we should retry
+		if i < maxAttempts-1 && isTemporaryNetworkError(err, lastStatus) {
+			delay := s.retryDelays[i]
+			reason := "server error"
+			if lastErr != nil {
+				reason = lastErr.Error()
+			} else if lastStatus > 0 {
+				reason = fmt.Sprintf("HTTP %d", lastStatus)
+			}
+
+			if s.eventEmitter != nil && ctx != nil {
+				s.eventEmitter(ctx, "sync:retry", models.SyncRetryPayload{
+					Operation:   operation,
+					Attempt:     attempt,
+					MaxAttempts: maxAttempts,
+					WaitSeconds: int(delay.Seconds()),
+					Reason:      reason,
+				})
+			}
+
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, pr, ctx.Err()
+			}
+			continue
+		}
+
+		// Non-retryable error or exhausted retries
+		break
+	}
+
+	if lastErr != nil {
+		return nil, nil, fmt.Errorf("network request failed after %d attempts: %w", maxAttempts, lastErr)
+	}
+	return nil, nil, fmt.Errorf("network request rejected with temporary status %d after %d attempts", lastStatus, maxAttempts)
 }
 
 // SetEncryptionKey sets a custom 256-bit local encryption key (e.g. for key rotation or testing).
@@ -223,7 +445,7 @@ func (s *SyncClientService) encryptBundle(
 }
 
 // PushProjectToCloud packages the local song (SQLite + .wav audios), encrypts it E2EE with AES-256-GCM,
-// and pushes the Zero-Knowledge payload to the Kizuna Cloud server.
+// and pushes the Zero-Knowledge payload to the Kizuna Cloud server with progress and retry backoff (Issues #13, #23).
 func (s *SyncClientService) PushProjectToCloud(
 	ctx context.Context,
 	cloudURL string,
@@ -283,17 +505,32 @@ func (s *SyncClientService) executeEncryptedPush(
 		return nil, fmt.Errorf("failed to serialize sync payload: %w", err)
 	}
 
+	totalBytes := int64(len(bodyBytes))
 	endpoint := fmt.Sprintf("%s/api/v1/sync/push", strings.TrimRight(cloudURL, "/"))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create sync request: %w", err)
-	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	resp, pr, err := s.doWithRetry(ctx, "push", func(attempt, maxAttempts int) (*http.Request, *progressReader, error) {
+		byteReader := bytes.NewReader(bodyBytes)
+		reader := newProgressReader(ctx, byteReader, "push", totalBytes, attempt, maxAttempts, s.eventEmitter)
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, reader)
+		if reqErr != nil {
+			return nil, nil, reqErr
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+		req.ContentLength = totalBytes
+		return req, reader, nil
+	})
 
-	resp, err := s.client.Do(req)
 	if err != nil {
+		if s.eventEmitter != nil && ctx != nil {
+			s.eventEmitter(ctx, "sync:progress", models.SyncProgressPayload{
+				Operation:   "push",
+				TotalBytes:  totalBytes,
+				Percentage:  0,
+				Phase:       "failed",
+				MaxAttempts: len(s.retryDelays),
+			})
+		}
 		return nil, fmt.Errorf("failed to connect to Kizuna Cloud at %s: %w", cloudURL, err)
 	}
 	defer resp.Body.Close()
@@ -322,6 +559,10 @@ func (s *SyncClientService) executeEncryptedPush(
 
 	if apiResp.Data == nil {
 		return nil, fmt.Errorf("server returned empty data in response")
+	}
+
+	if pr != nil {
+		pr.emitProgress("completed", totalBytes, totalBytes, 100.0)
 	}
 
 	return apiResp.Data, nil
@@ -498,7 +739,7 @@ func writeRestoredAudioBlob(songID int, blob models.AudioFileBlob) (string, erro
 }
 
 // PullProjectFromCloud downloads a project from Kizuna Cloud, decrypts its E2EE bundle using the local key,
-// and unpacks SQLite records + .wav audio files into the local workspace (Issue #14).
+// and unpacks SQLite records + .wav audio files into the local workspace with progress and retry resilience (Issues #14, #23).
 func (s *SyncClientService) PullProjectFromCloud(
 	ctx context.Context,
 	cloudURL string,
@@ -516,18 +757,31 @@ func (s *SyncClientService) PullProjectFromCloud(
 	}
 
 	endpoint := fmt.Sprintf("%s/api/v1/sync/pull?project_id=%d", strings.TrimRight(cloudURL, "/"), projectID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create pull request: %w", err)
-	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	resp, _, err := s.doWithRetry(ctx, "pull", func(attempt, maxAttempts int) (*http.Request, *progressReader, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if reqErr != nil {
+			return nil, nil, reqErr
+		}
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+		return req, nil, nil
+	})
 
-	resp, err := s.client.Do(req)
 	if err != nil {
+		if s.eventEmitter != nil && ctx != nil {
+			s.eventEmitter(ctx, "sync:progress", models.SyncProgressPayload{
+				Operation:   "pull",
+				Percentage:  0,
+				Phase:       "failed",
+				MaxAttempts: len(s.retryDelays),
+			})
+		}
 		return nil, 0, fmt.Errorf("failed to connect to Kizuna Cloud at %s: %w", cloudURL, err)
 	}
 	defer resp.Body.Close()
+
+	contentLength := resp.ContentLength
+	reader := newProgressReader(ctx, resp.Body, "pull", contentLength, 1, len(s.retryDelays), s.eventEmitter)
 
 	var apiResp struct {
 		Success bool                 `json:"success"`
@@ -539,7 +793,7 @@ func (s *SyncClientService) PullProjectFromCloud(
 		} `json:"error,omitempty"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(reader).Decode(&apiResp); err != nil {
 		return nil, 0, fmt.Errorf("invalid server response (HTTP %d): %w", resp.StatusCode, err)
 	}
 
@@ -554,6 +808,8 @@ func (s *SyncClientService) PullProjectFromCloud(
 	if apiResp.Data == nil {
 		return nil, 0, fmt.Errorf("server returned empty data for project %d", projectID)
 	}
+
+	reader.emitProgress("completed", reader.transferred, reader.transferred, 100.0)
 
 	localSongID, err := s.ImportCloudProject(ctx, apiResp.Data)
 	if err != nil {
