@@ -21,6 +21,7 @@
 
     import { activeTrackIndex } from "@/stores/trackStore";
     import { song } from "@/stores/projectStore";
+    import { instrumentStore } from "@/stores/instrumentStore";
     import { toastStore } from "@shared/stores/toastStore";
     import type { Instrument, Track } from "@shared/types/wails";
 
@@ -29,6 +30,7 @@
         DeleteTrack,
         UpdateTrack,
         GetInstruments,
+        SaveSong,
     } from "../../wailsjs/go/main/App";
 
     let editingIndex: number | null = null;
@@ -39,7 +41,15 @@
 
     let instruments: Instrument[] = [];
 
+    $: if ($instrumentStore && $instrumentStore.length > 0) {
+        instruments = $instrumentStore;
+    }
+
     onMount(async () => {
+        if ($instrumentStore && $instrumentStore.length > 0) {
+            instruments = $instrumentStore;
+            return;
+        }
         try {
             instruments = (await GetInstruments()) ?? [];
         } catch (err) {
@@ -60,6 +70,13 @@
         if (!$song) return;
 
         try {
+            if ($song.id === 0) {
+                const savedSong = await SaveSong($song);
+                if (savedSong) {
+                    song.set(savedSong);
+                }
+            }
+
             const trackCount = $song.tracks ? $song.tracks.length : 0;
             const newTrackName = `Track ${trackCount + 1}`;
 
@@ -110,16 +127,17 @@
         }
 
         trackToUpdate.name = editingName;
+        song.set($song);
+        cancelEditing();
 
         try {
-            await UpdateTrack(trackToUpdate);
-            song.set($song);
+            if (trackToUpdate.id > 0) {
+                await UpdateTrack(trackToUpdate);
+            }
             toastStore.success(`Renamed track to "${editingName}"`);
         } catch (err) {
             console.error("Failed to update track name:", err);
             toastStore.error("Error saving track name.");
-        } finally {
-            cancelEditing();
         }
     }
 
@@ -135,7 +153,9 @@
         if (!trackToDelete) return;
 
         try {
-            await DeleteTrack(trackToDelete.id);
+            if (trackToDelete.id > 0) {
+                await DeleteTrack(trackToDelete.id);
+            }
             $song.tracks.splice(index, 1);
             activeTrackIndex.clamp($song.tracks.length);
             song.set($song);
@@ -147,9 +167,11 @@
     }
 
     async function handleInstrumentChange(track: Track) {
+        song.set($song);
         try {
-            await UpdateTrack(track);
-            song.set($song);
+            if (track.id > 0) {
+                await UpdateTrack(track);
+            }
             toastStore.success("Instrument updated");
         } catch (err) {
             console.error("Failed to update instrument:", err);

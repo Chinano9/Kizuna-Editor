@@ -62,19 +62,61 @@
 
     function insertSnippet(snippet: string) {
         if (!track || !textareaEl) return;
-        const start = textareaEl.selectionStart ?? track.data_content.length;
-        const end = textareaEl.selectionEnd ?? track.data_content.length;
         const current = track.data_content ?? "";
-        track.data_content = current.slice(0, start) + snippet + current.slice(end);
+        let start = textareaEl.selectionStart ?? current.length;
+        let end = textareaEl.selectionEnd ?? current.length;
+
+        if (instrumentName !== "Vocals") {
+            const dotMatch = /(?:^|\n)[ \t]*\.[ \t]*(?=\n|$)/.exec(current);
+            if (dotMatch) {
+                const dotEndIndex = dotMatch.index + dotMatch[0].length;
+                if (start <= dotEndIndex) {
+                    start = dotEndIndex;
+                    end = Math.max(end, dotEndIndex);
+                }
+            }
+        }
+
+        const needsLeadingNewline =
+            instrumentName !== "Vocals" &&
+            start > 0 &&
+            current[start - 1] === ".";
+        const effectiveSnippet = (needsLeadingNewline ? "\n" : "") + snippet;
+
+        track.data_content = current.slice(0, start) + effectiveSnippet + current.slice(end);
         activeSongStore.updateTrack(track);
         dispatch("contentChange", track.data_content);
 
         requestAnimationFrame(() => {
             if (!textareaEl) return;
             textareaEl.focus();
-            const cursor = start + snippet.length;
+            const cursor = start + effectiveSnippet.length;
             textareaEl.setSelectionRange(cursor, cursor);
         });
+    }
+
+    function handlePaste(event: ClipboardEvent) {
+        if (!track || !textareaEl || instrumentName === "Vocals") return;
+        const pasted = event.clipboardData?.getData("text/plain") ?? "";
+        if (!pasted.trim()) return;
+
+        const current = track.data_content ?? "";
+        const isDefaultHeaderOnly = /^\\title\s+"[^"]*"\s*\r?\n\s*\.\s*$/.test(current.trim());
+        const pastedHasOwnHeaderOrDot =
+            /\\(?:title|subtitle|tempo|ts|track|instrument)\b/i.test(pasted) ||
+            /(?:^|\r?\n)\s*\.\s*(?:\r?\n|$)/.test(pasted);
+
+        if (isDefaultHeaderOnly && pastedHasOwnHeaderOrDot) {
+            event.preventDefault();
+            track.data_content = pasted;
+            activeSongStore.updateTrack(track);
+            dispatch("contentChange", track.data_content);
+            requestAnimationFrame(() => {
+                if (!textareaEl) return;
+                const cursor = track.data_content.length;
+                textareaEl.setSelectionRange(cursor, cursor);
+            });
+        }
     }
 
     function handleKeydown(event: KeyboardEvent) {
@@ -177,6 +219,7 @@
             class="editor-textarea"
             bind:value={track.data_content}
             on:input={handleInput}
+            on:paste={handlePaste}
             on:keydown={handleKeydown}
             spellcheck="false"
             placeholder={instrumentName === "Vocals"
@@ -208,7 +251,6 @@
         flex-direction: column;
         background-color: var(--app-bg-alt);
         border-left: 1px solid var(--lcd-border);
-        transition: width 0.2s ease;
     }
 
     .editor-container.distraction-free {

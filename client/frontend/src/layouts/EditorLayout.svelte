@@ -31,8 +31,11 @@
             return;
         }
 
+        if ($song && $song.id === id && $song.tracks && $song.tracks.length > 0) {
+            return;
+        }
+
         try {
-            console.log("Loading full content for ID:", id);
             const songData = await GetSong(id);
             if (songData) {
                 song.set(songData);

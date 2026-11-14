@@ -18,6 +18,7 @@
         GetAvailableDrivers,
         GetCurrentDriver,
         SetAudioDriver,
+        SaveSong,
     } from "@wails/go/main/App";
     import type { Track, AudioVersion, AudioDevice } from "@shared/types/wails";
     import { formatTime } from "@shared/lib/formatters";
@@ -88,13 +89,16 @@
     let synthStartOffset = 0;
     let lastTriggeredEventIdx = -1;
     let activePlaybackMode: "take" | "synth" = "take";
+    let isPollingPosition = false;
 
-    $: hasPlayableScore = Boolean(
-        activeTrack && looksLikeAlphaTex(activeTrack.data_content ?? ""),
-    );
     $: scoreTimeline = parsePlayableNotesFromAlphaTex(
         activeTrack?.data_content ?? "",
         $song?.bpm || 120,
+    );
+    $: hasPlayableScore = Boolean(
+        activeTrack &&
+            looksLikeAlphaTex(activeTrack.data_content ?? "") &&
+            scoreTimeline.events.length > 0,
     );
 
     // Update estimated duration when in score synth mode and not playing a WAV take
@@ -227,15 +231,12 @@
         audioPlayerStore.registerTogglePlayHandler(togglePlay);
         audioPlayerStore.setVolume(volume);
 
-        await loadDrivers();
-        await loadDevices();
-        await loadTakes();
-
-        try {
-            await SetAudioVolume(volume);
-        } catch (err) {
-            console.error(err);
-        }
+        await Promise.allSettled([
+            loadDrivers(),
+            loadDevices(),
+            loadTakes(),
+            SetAudioVolume(volume),
+        ]);
     });
 
     async function loadDrivers() {
@@ -302,6 +303,17 @@
                     await togglePlay();
                 }
 
+                if (!songID && $song) {
+                    const saved = await SaveSong($song);
+                    if (saved) {
+                        song.set(saved);
+                        songID = saved.id;
+                        if (saved.tracks && saved.tracks.length > 0 && selectedTargetTrackID === 0) {
+                            selectedTargetTrackID = saved.tracks[0].id;
+                        }
+                    }
+                }
+
                 await StartRecording(
                     songID,
                     activeTrack ? activeTrack.name : "Global Sound",
@@ -349,7 +361,18 @@
         });
     }
 
-    // --- Playback Controls (Synchronized Take + AlphaTex Score Playback) ---
+    function prepareSynthTimelineFromPosition(startSecs: number) {
+        synthStartOffset = startSecs;
+        synthStartWallTime = performance.now();
+        lastTriggeredEventIdx = -1;
+        for (let i = 0; i < scoreTimeline.events.length; i++) {
+            if (scoreTimeline.events[i].startTimeSeconds < startSecs - 0.02) {
+                lastTriggeredEventIdx = i;
+            }
+        }
+    }
+
+    // --- Playback Controls (Synchronized Take + Parallel AlphaTex Score Playback) ---
     async function togglePlay() {
         if (!selectedTakePath && !hasPlayableScore) return;
 
@@ -359,31 +382,67 @@
                     activePlaybackMode = "take";
                     audioPlayerStore.setPlaybackMode("take");
                     await PlayAudio(selectedTakePath);
-                    const dur = await GetPlaybackDuration();
-                    playbackDuration =
-                        dur > 0 ? dur : Math.max(scoreTimeline.durationSeconds, 1);
+                    const wavDur = await GetPlaybackDuration();
+                    const synthDur = hasPlayableScore ? scoreTimeline.durationSeconds : 0;
+                    playbackDuration = Math.max(wavDur, synthDur, 1);
+
+                    if (playbackPosition >= playbackDuration - 0.05) {
+                        playbackPosition = 0;
+                        if (wavDur > 0) {
+                            await SeekAudio(0);
+                        }
+                    }
+
+                    prepareSynthTimelineFromPosition(playbackPosition);
+
                     isPlaying = true;
                     dispatch("playStateChange", true);
                     notifyPlaybackSync();
 
+                    if (hasPlayableScore) {
+                        triggerScheduledNotesUpTo(playbackPosition, playbackPosition);
+                    }
+
                     if (playbackIntervalId) clearInterval(playbackIntervalId);
+                    isPollingPosition = false;
                     playbackIntervalId = setInterval(async () => {
-                        if (isPlaying && !isSeeking) {
-                            try {
-                                const pos = await GetPlaybackPosition();
-                                if (!isSeeking) {
-                                    playbackPosition = pos;
-                                    notifyPlaybackSync();
-                                    if (
-                                        pos >= playbackDuration - 0.05 &&
-                                        playbackDuration > 0
-                                    ) {
-                                        stopPlayback();
-                                    }
-                                }
-                            } catch (e) {
-                                console.error(e);
+                        if (!isPlaying || isSeeking || isPollingPosition) return;
+                        isPollingPosition = true;
+                        try {
+                            const prevPos = playbackPosition;
+                            const wavPos = await GetPlaybackPosition();
+                            if (!isPlaying || isSeeking) return;
+
+                            const wallPos =
+                                synthStartOffset +
+                                (performance.now() - synthStartWallTime) / 1000;
+                            const wavStillPlaying =
+                                wavDur > 0 && wavPos < wavDur - 0.05;
+                            const nextPos = wavStillPlaying
+                                ? wavPos
+                                : Math.max(wavPos, wallPos);
+
+                            if (wavStillPlaying) {
+                                synthStartOffset = wavPos;
+                                synthStartWallTime = performance.now();
                             }
+
+                            playbackPosition = nextPos;
+                            if (hasPlayableScore) {
+                                triggerScheduledNotesUpTo(prevPos, nextPos);
+                            }
+                            notifyPlaybackSync();
+
+                            if (
+                                nextPos >= playbackDuration - 0.05 &&
+                                playbackDuration > 0
+                            ) {
+                                stopPlayback();
+                            }
+                        } catch (e) {
+                            console.error(e);
+                        } finally {
+                            isPollingPosition = false;
                         }
                     }, 30);
                 } else {
@@ -394,14 +453,7 @@
                     if (playbackPosition >= playbackDuration - 0.05) {
                         playbackPosition = 0;
                     }
-                    synthStartOffset = playbackPosition;
-                    synthStartWallTime = performance.now();
-                    lastTriggeredEventIdx = -1;
-                    for (let i = 0; i < scoreTimeline.events.length; i++) {
-                        if (scoreTimeline.events[i].startTimeSeconds < synthStartOffset - 0.02) {
-                            lastTriggeredEventIdx = i;
-                        }
-                    }
+                    prepareSynthTimelineFromPosition(playbackPosition);
 
                     isPlaying = true;
                     dispatch("playStateChange", true);

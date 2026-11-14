@@ -41,21 +41,37 @@ let togglePlayHandler: (() => void | Promise<void>) | null = null;
 export const audioPlayerStore = {
     subscribe,
     setPlaying: (isPlaying: boolean, isPaused = false) =>
-        update((s) => ({ ...s, isPlaying, isPaused })),
-    setPosition: (pos: number) => update((s) => ({ ...s, positionSeconds: pos })),
-    setDuration: (dur: number) => update((s) => ({ ...s, durationSeconds: dur })),
-    setVolume: (vol: number) => update((s) => ({ ...s, volume: vol })),
-    setActiveTake: (path: string) => update((s) => ({ ...s, activeTakePath: path })),
+        update((s) => (s.isPlaying === isPlaying && s.isPaused === isPaused ? s : { ...s, isPlaying, isPaused })),
+    setPosition: (pos: number) =>
+        update((s) => (Math.abs(s.positionSeconds - pos) < 0.005 ? s : { ...s, positionSeconds: pos })),
+    setDuration: (dur: number) =>
+        update((s) => (Math.abs(s.durationSeconds - dur) < 0.005 ? s : { ...s, durationSeconds: dur })),
+    setVolume: (vol: number) =>
+        update((s) => (Math.abs(s.volume - vol) < 0.005 ? s : { ...s, volume: vol })),
+    setActiveTake: (path: string) =>
+        update((s) => (s.activeTakePath === path ? s : { ...s, activeTakePath: path })),
     setPlaybackMode: (playbackMode: PlaybackMode) =>
-        update((s) => ({ ...s, playbackMode })),
+        update((s) => (s.playbackMode === playbackMode ? s : { ...s, playbackMode })),
     setScoreSync: (currentBar: number, currentBeat: number, totalBars: number, bpm: number) =>
-        update((s) => ({
-            ...s,
-            currentBar,
-            currentBeat,
-            totalBars: Math.max(1, totalBars),
-            bpm: bpm > 0 ? bpm : s.bpm,
-        })),
+        update((s) => {
+            const safeTotalBars = Math.max(1, totalBars);
+            const safeBpm = bpm > 0 ? bpm : s.bpm;
+            if (
+                s.currentBar === currentBar &&
+                s.currentBeat === currentBeat &&
+                s.totalBars === safeTotalBars &&
+                s.bpm === safeBpm
+            ) {
+                return s;
+            }
+            return {
+                ...s,
+                currentBar,
+                currentBeat,
+                totalBars: safeTotalBars,
+                bpm: safeBpm,
+            };
+        }),
     registerSeekHandler: (fn: ((seconds: number) => void | Promise<void>) | null) => {
         seekHandler = fn;
     },

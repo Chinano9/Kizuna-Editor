@@ -59,12 +59,14 @@
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let rafId: number | null = null;
     let lastTrackId: number | null = null;
+    let lastScheduleKey = "";
     let lastRenderedTex = "";
+    let hasRenderedScore = false;
     let isRendering = false;
     let renderError = "";
 
     // Synchronized score metadata
-    let parsedScoreBars = 1;
+    let parsedScoreBars = 0;
     let parsedScoreTempo = 120;
 
     // Effective playback values (accept both direct props from EditorLayout and audioPlayerStore)
@@ -140,34 +142,36 @@
 
     function rescaleScoreToFitWidth() {
         if (!scoreContainer) return;
-        const svg = scoreContainer.querySelector("svg") as SVGSVGElement | null;
-        if (!svg) return;
 
-        // Use stable unscaled SVG attributes from AlphaTab as absolute constants
-        // to prevent feedback loops with getBBox() during continuous resizing.
-        const widthAttr = svg.getAttribute("width");
-        const heightAttr = svg.getAttribute("height");
-        const svgWidth = widthAttr ? parseFloat(widthAttr) : svg.getBBox().width;
-        const svgHeight = heightAttr ? parseFloat(heightAttr) : svg.getBBox().height;
-        if (!svgWidth || !svgHeight) return;
+        // Keep scoreContainer responsive so AlphaTab's ResizeObserver and layout engine
+        // always measure the full available panel width and never collapse height to a single partial.
+        scoreContainer.style.width = "100%";
+        scoreContainer.style.height = "auto";
+        scoreContainer.style.transform = "none";
 
-        const container = scoreContainer.parentElement as HTMLElement | null;
+        const container =
+            previewScrollContainer || (scoreContainer.parentElement as HTMLElement | null);
         if (!container) return;
 
         const availableWidth = container.clientWidth;
         if (!availableWidth) return;
 
-        // Subtract a 24px safe margin to prevent scrollbar toggling oscillation loops.
-        const scale = Math.min(1, (availableWidth - 24) / svgWidth);
+        const surface = scoreContainer.querySelector(".at-surface") as HTMLElement | null;
+        if (!surface) return;
 
-        // Prevent layout thrashing and loops on microscopic adjustments
+        const surfaceWidth = parseFloat(surface.style.width || "0") || surface.offsetWidth;
+        if (!surfaceWidth) return;
+
+        const scale = Math.min(1, (availableWidth - 16) / surfaceWidth);
         if (Math.abs(scale - currentScale) < 0.005) return;
         currentScale = scale;
 
-        scoreContainer.style.transformOrigin = "top left";
-        scoreContainer.style.transform = `scale(${scale})`;
-        scoreContainer.style.width = `${svgWidth}px`;
-        scoreContainer.style.height = `${svgHeight}px`;
+        if (scale < 0.995) {
+            surface.style.transformOrigin = "top left";
+            surface.style.transform = `scale(${scale})`;
+        } else {
+            surface.style.transform = "none";
+        }
     }
 
     // Reactive block to determine the instrument name whenever track or instrument catalog changes
@@ -180,18 +184,53 @@
         }
     }
 
-    function initializeApi(staveProfile: "Default" | "Score" = "Default") {
-        if (!scoreContainer) return;
+    $: isPlainLyricsTrack =
+        instrumentName === "Vocals" ||
+        (Boolean(track?.data_content?.trim()) && !looksLikeAlphaTex(track?.data_content ?? ""));
 
-        if (api && currentStaveProfile && currentStaveProfile !== staveProfile) {
-            destroyApi();
+    function clearScoreSurfaceOnly() {
+        if (scoreContainer) {
+            const surface = scoreContainer.querySelector(".at-surface") as HTMLElement | null;
+            if (surface) {
+                surface.innerHTML = "";
+                surface.style.height = "0px";
+            }
+        }
+    }
+
+    function clearRenderedScore() {
+        clearScoreSurfaceOnly();
+        lastRenderedTex = "";
+        hasRenderedScore = false;
+        isRendering = false;
+        renderError = "";
+        parsedScoreBars = 0;
+    }
+
+    async function initializeApi(staveProfile: "Default" | "Score" = "Default"): Promise<boolean> {
+        if (!scoreContainer) return false;
+
+        if (api) {
+            if (currentStaveProfile !== staveProfile) {
+                try {
+                    api.settings.display.staveProfile = staveProfile === "Score" ? 2 : 0;
+                    api.updateSettings();
+                    currentStaveProfile = staveProfile;
+                } catch {
+                    // Fallback if updateSettings is unavailable
+                }
+            }
+            return false;
         }
 
-        if (api) return;
+        scoreContainer.style.width = "100%";
+        scoreContainer.style.height = "auto";
+        scoreContainer.style.transform = "none";
 
         api = new AlphaTabApi(scoreContainer, {
             core: {
-                tex: true,
+                tex: false,
+                enableLazyLoading: false,
                 useWorkers: false,
                 engine: "svg",
                 fontDirectory: "/font/",
@@ -223,6 +262,7 @@
             api.renderFinished.on(() => {
                 isRendering = false;
                 renderError = "";
+                hasRenderedScore = Boolean(lastRenderedTex);
                 currentScale = 0;
                 rescaleScoreToFitWidth();
             });
@@ -234,6 +274,14 @@
                 renderError = err?.message || "Sintaxis AlphaTex incompleta";
             });
         }
+
+        // Wait one animation frame so AlphaTab's deferred uiFacade.initialRender()
+        // registers its preRender listener and container width before api.tex() is called.
+        if (typeof requestAnimationFrame === "function") {
+            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        }
+
+        return true;
     }
 
     function clearPendingRender() {
@@ -255,6 +303,8 @@
         }
         currentStaveProfile = "";
         lastRenderedTex = "";
+        lastScheduleKey = "";
+        hasRenderedScore = false;
         isRendering = false;
     }
 
@@ -277,17 +327,26 @@
         auto: boolean,
         immediate: boolean,
     ) {
-        clearPendingRender();
-
         if (!currentTrack) {
-            destroyApi();
+            clearPendingRender();
+            clearRenderedScore();
             instrumentName = "";
             lastTrackId = null;
+            lastScheduleKey = "";
             return;
         }
 
+        const content = currentTrack.data_content ?? "";
+        const scheduleKey = `${currentTrack.id}:${currentInstrumentName}:${auto ? 1 : 0}:${content}`;
+        if (!immediate && scheduleKey === lastScheduleKey) {
+            return;
+        }
+        lastScheduleKey = scheduleKey;
+
+        clearPendingRender();
+
         if (currentInstrumentName === "Vocals") {
-            destroyApi();
+            clearRenderedScore();
             lastTrackId = currentTrack.id;
             return;
         }
@@ -295,9 +354,8 @@
         const isTrackSwitch = lastTrackId !== currentTrack.id;
         lastTrackId = currentTrack.id;
 
-        const content = currentTrack.data_content ?? "";
-        if (!looksLikeAlphaTex(content)) {
-            destroyApi();
+        if (content.trim() && !looksLikeAlphaTex(content)) {
+            clearRenderedScore();
             return;
         }
 
@@ -306,17 +364,7 @@
 
         debounceTimer = setTimeout(() => {
             debounceTimer = null;
-            const runRender = async () => {
-                await executeAlphaTabRender(currentTrack, currentInstrumentName, auto);
-            };
-            if (typeof requestAnimationFrame === "function") {
-                rafId = requestAnimationFrame(() => {
-                    rafId = null;
-                    runRender();
-                });
-            } else {
-                runRender();
-            }
+            executeAlphaTabRender(currentTrack, currentInstrumentName, auto);
         }, delay);
     }
 
@@ -326,10 +374,12 @@
         auto: boolean,
     ) {
         const content = currentTrack.data_content ?? "";
-        const preparedTex = prepareAlphaTexForRender(content, auto);
+        const effectiveContent = content.trim();
+        const preparedTex = prepareAlphaTexForRender(effectiveContent, auto);
+        const fallbackRawTex = auto ? prepareAlphaTexForRender(effectiveContent, false) : preparedTex;
 
         if (!preparedTex) {
-            destroyApi();
+            clearRenderedScore();
             return;
         }
 
@@ -345,19 +395,25 @@
         if (
             api &&
             lastRenderedTex === preparedTex &&
-            currentStaveProfile === newStaveProfile
+            currentStaveProfile === newStaveProfile &&
+            hasRenderedScore
         ) {
             isRendering = false;
             return;
         }
 
-        initializeApi(newStaveProfile);
+        await initializeApi(newStaveProfile);
+        if (!api || !scoreContainer) {
+            isRendering = false;
+            return;
+        }
+
         parsedScoreBars = scoreMeta.barCount;
         parsedScoreTempo = scoreMeta.bpm;
-        renderMusic(preparedTex);
+        renderMusic(preparedTex, fallbackRawTex);
     }
 
-    function renderMusic(textToRender: string) {
+    function renderMusic(textToRender: string, fallbackRawTex: string = "") {
         if (!api) {
             isRendering = false;
             return;
@@ -365,21 +421,59 @@
 
         const trimmed = textToRender.trim();
         if (!trimmed) {
-            api.tex("");
-            lastRenderedTex = "";
-            isRendering = false;
+            clearRenderedScore();
             return;
         }
 
         try {
             renderError = "";
             lastRenderedTex = trimmed;
-            api.tex(trimmed);
+            api.tex(trimmed, [-1]);
+            hasRenderedScore = !renderError;
+
+            // If autoBar injection produced syntax that AlphaTab rejected, fall back to raw AlphaTex
+            if (renderError && fallbackRawTex && fallbackRawTex.trim() !== trimmed) {
+                renderError = "";
+                lastRenderedTex = fallbackRawTex.trim();
+                api.tex(lastRenderedTex, [-1]);
+                hasRenderedScore = !renderError;
+            }
+
+            if (renderError) {
+                clearScoreSurfaceOnly();
+                hasRenderedScore = false;
+            }
+
             tick().then(() => {
                 isRendering = false;
-                rescaleScoreToFitWidth();
+                if (hasRenderedScore) {
+                    rescaleScoreToFitWidth();
+                }
             });
         } catch (err: any) {
+            if (fallbackRawTex && fallbackRawTex.trim() !== trimmed) {
+                try {
+                    renderError = "";
+                    lastRenderedTex = fallbackRawTex.trim();
+                    api.tex(lastRenderedTex, [-1]);
+                    hasRenderedScore = !renderError;
+                    if (renderError) {
+                        clearScoreSurfaceOnly();
+                        hasRenderedScore = false;
+                    }
+                    tick().then(() => {
+                        isRendering = false;
+                        if (hasRenderedScore) {
+                            rescaleScoreToFitWidth();
+                        }
+                    });
+                    return;
+                } catch {
+                    // Fall through to report error
+                }
+            }
+            clearScoreSurfaceOnly();
+            hasRenderedScore = false;
             isRendering = false;
             renderError = err?.message || "Error al procesar AlphaTex";
         }
@@ -425,7 +519,7 @@
         {/if}
     </div>
 
-    {#if track && instrumentName !== "Vocals" && looksLikeAlphaTex(track.data_content ?? "")}
+    {#if track && instrumentName !== "Vocals" && hasRenderedScore}
         <!-- Synchronized Measure Timeline Bar -->
         <div class="measure-sync-strip" aria-label="Navegador de compases sincronizado">
             <div class="measure-cells">
@@ -457,16 +551,32 @@
         </div>
     {/if}
 
-    {#if instrumentName === "Vocals"}
+    {#if isPlainLyricsTrack}
         <LyricsViewer source={track?.data_content} />
-    {:else if track && !looksLikeAlphaTex(track.data_content ?? "")}
-        <LyricsViewer source={track?.data_content} />
-    {:else}
-        <!-- This container is for AlphaTab -->
-        <div class="preview-container" bind:this={previewScrollContainer}>
-            <div class="score-scale-wrapper" bind:this={scoreContainer} />
-        </div>
     {/if}
+
+    <!-- Keep AlphaTab container mounted across track switches to avoid costly re-initialization -->
+    <div
+        class="preview-container"
+        class:hidden={isPlainLyricsTrack}
+        bind:this={previewScrollContainer}
+    >
+        {#if !hasRenderedScore && !isRendering && !renderError}
+            <div class="empty-score-placeholder">
+                <span class="empty-score-title">Vista previa lista</span>
+                <p class="empty-score-hint">
+                    Escribe o pega notación AlphaTex o usa los botones <strong>+ Compás</strong>,
+                    <strong>+ Acorde</strong> y <strong>| Barra</strong> para renderizar la partitura.
+                </p>
+            </div>
+        {:else if !hasRenderedScore && !isRendering && renderError}
+            <div class="empty-score-placeholder">
+                <span class="empty-score-title">Sintaxis AlphaTex en edición</span>
+                <p class="empty-score-hint">{renderError}</p>
+            </div>
+        {/if}
+        <div class="score-scale-wrapper" bind:this={scoreContainer} />
+    </div>
 </div>
 
 <style>
@@ -678,8 +788,41 @@
         position: relative;
     }
 
+    .preview-container.hidden {
+        display: none;
+    }
+
+    .empty-score-placeholder {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 32px;
+        color: #6b7280;
+        font-family: var(--lcd-font-ui, sans-serif);
+        pointer-events: none;
+    }
+
+    .empty-score-title {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #374151;
+        margin-bottom: 6px;
+    }
+
+    .empty-score-hint {
+        font-size: 0.85rem;
+        max-width: 420px;
+        line-height: 1.5;
+        margin: 0;
+    }
+
     .score-scale-wrapper {
+        width: 100%;
+        min-height: 100%;
         transform-origin: top left;
-        will-change: transform;
     }
 </style>

@@ -24,42 +24,71 @@
 
 // --- CONSTANTS & REGEX ---
 
-const REGEX_NOTE = /^(\d+|r)/;
-const REGEX_TS = /\\ts\s+(\d+)\s+(\d+)/;
-// const REGEX_TUPLET_START = /\\tuplet\s+(\d+)/; // Reserved for future use
+const REGEX_TS = /\\ts\s+(\d+)\s+(\d+)/i;
 
-// Distinguishes Guitar Coordinates (Fret.String, e.g., "3.5") from Dotted Durations (e.g., "2.")
-const REGEX_GUITAR_COORD = /^\d+\.\d+$/;
+// Header / metadata directives that should not be treated as body notes when no '.' separator is present
+const HEADER_DIRECTIVE_LINE_REGEX =
+    /^\\(title|subtitle|artist|album|words|music|copyright|tempo|ts|ks|clef|tuning|instrument|capo|chord|staff|track|lyrics)\b/i;
+
+// Directives in the body that consume following parameter tokens
+const DIRECTIVES_WITH_ONE_ARG = new Set([
+    "\\tempo",
+    "\\instrument",
+    "\\capo",
+    "\\rc",
+    "\\clef",
+    "\\ks",
+    "\\jump",
+    "\\section",
+    "\\marker",
+    "\\track",
+    "\\staff",
+    "\\title",
+    "\\subtitle",
+    "\\artist",
+    "\\album",
+    "\\words",
+    "\\music",
+    "\\copyright",
+]);
 
 // --- PARSING HELPERS ---
 
 /**
- * Extracts duration value from a token (e.g., ":4", ":8.").
- * Handles dotted notes.
+ * Parses a raw duration denominator string (e.g., "4", "8.", "16") into a measure fraction.
  */
-function parseDuration(token: string): number | null {
-    if (token.startsWith(':')) {
-        const hasDot = token.includes('.');
-        // Remove ':' and '.' to parse the base number
-        const cleanToken = token.substring(1).replace('.', '');
-        const val = parseInt(cleanToken);
+function parseDurationValue(rawDur: string): number | null {
+    if (!rawDur) return null;
+    const hasDot = rawDur.endsWith(".");
+    const cleanToken = rawDur.replace(/\./g, "");
+    const val = parseInt(cleanToken, 10);
 
-        if (!isNaN(val) && val !== 0) {
-            let duration = 1 / val;
-            if (hasDot) duration *= 1.5;
-            return duration;
-        }
+    if (!isNaN(val) && val > 0) {
+        let duration = 1 / val;
+        if (hasDot) duration *= 1.5;
+        return duration;
     }
     return null;
 }
 
 /**
- * Extracts Time Signature from a line (e.g., "\ts 4 4").
+ * Extracts duration value from a range duration token (e.g., ":4", ":8.").
+ * Handles dotted notes.
  */
-function parseTimeSignature(line: string): { num: number, den: number } | null {
+function parseDuration(token: string): number | null {
+    if (token.startsWith(":")) {
+        return parseDurationValue(token.substring(1));
+    }
+    return null;
+}
+
+/**
+ * Extracts Time Signature from a string (e.g., "\ts 4 4").
+ */
+function parseTimeSignature(line: string): { num: number; den: number } | null {
     const match = line.match(REGEX_TS);
     if (match) {
-        return { num: parseInt(match[1]), den: parseInt(match[2]) };
+        return { num: parseInt(match[1], 10), den: parseInt(match[2], 10) };
     }
     return null;
 }
@@ -78,6 +107,483 @@ function getTupletRatio(num: number): number {
     return 1;
 }
 
+interface ParsedNoteToken {
+    explicitDuration: number | null;
+    isDottedCurrent: boolean;
+    multiplier: number;
+}
+
+/**
+ * Parses a single token to determine if it is a valid AlphaTex note or rest,
+ * extracting any explicit duration suffix (e.g. "3.3.8") or repeat multiplier (e.g. "0.6*4").
+ */
+function parseNoteOrRestToken(token: string): ParsedNoteToken | null {
+    if (!token) return null;
+
+    // 1. Guitar / stringed coordinate: fret.string[.duration][*multiplier] (e.g. "0.6", "3.3.4", "x.6", "-.6", "0.6*4")
+    const coordMatch = token.match(/^(?:\d{1,2}|x|-)\.[1-8](?:\.(\d+)(\.?)|(\.))?(?:\*(\d+))?$/i);
+    if (coordMatch) {
+        const explicitDuration = coordMatch[1] ? parseDurationValue(coordMatch[1]) : null;
+        const isDottedCurrent = Boolean(coordMatch[2] || coordMatch[3]);
+        const multiplier = coordMatch[4] ? Math.max(1, parseInt(coordMatch[4], 10)) : 1;
+        return {
+            explicitDuration,
+            isDottedCurrent,
+            multiplier,
+        };
+    }
+
+    // 2. Rest token: r[.duration][*multiplier] or r. (e.g. "r", "r.", "r.4", "r.8*2")
+    const restMatch = token.match(/^r(?:\.(\d+)(\.?)|(\.))?(?:\*(\d+))?$/i);
+    if (restMatch) {
+        const explicitDuration = restMatch[1] ? parseDurationValue(restMatch[1]) : null;
+        const isDottedCurrent = Boolean(restMatch[2] || restMatch[3]);
+        const multiplier = restMatch[4] ? Math.max(1, parseInt(restMatch[4], 10)) : 1;
+        return {
+            explicitDuration,
+            isDottedCurrent,
+            multiplier,
+        };
+    }
+
+    // 3. Standard notation / piano pitch: C4, D#4.8, Bb3*2
+    const pitchMatch = token.match(/^[A-Ga-g][#b]{0,2}-?\d(?:\.(\d+)(\.?)|(\.))?(?:\*(\d+))?$/);
+    if (pitchMatch) {
+        const explicitDuration = pitchMatch[1] ? parseDurationValue(pitchMatch[1]) : null;
+        const isDottedCurrent = Boolean(pitchMatch[2] || pitchMatch[3]);
+        const multiplier = pitchMatch[4] ? Math.max(1, parseInt(pitchMatch[4], 10)) : 1;
+        return {
+            explicitDuration,
+            isDottedCurrent,
+            multiplier,
+        };
+    }
+
+    // 4. Bare fret / tied / dead beat: 0, 2., -, x, 0*4
+    const bareMatch = token.match(/^(?:\d{1,2}(\.)?|-|x)(?:\*(\d+))?$/i);
+    if (bareMatch) {
+        const isDottedCurrent = Boolean(bareMatch[1]);
+        const multiplier = bareMatch[2] ? Math.max(1, parseInt(bareMatch[2], 10)) : 1;
+        return {
+            explicitDuration: null,
+            isDottedCurrent,
+            multiplier,
+        };
+    }
+
+    return null;
+}
+
+/**
+ * Checks whether a braced beat/note effect block (e.g. "{ d }", "{ dd v }") specifies a dotted beat.
+ */
+function hasDottedBeatEffect(braceBlock: string): boolean {
+    if (!braceBlock.startsWith("{") || !braceBlock.endsWith("}")) return false;
+    const inner = braceBlock.slice(1, -1);
+    return /(?:^|\s)dd?(?:\s|$)/i.test(inner);
+}
+
+/**
+ * Converts TeX-style '%' line comments outside of quoted strings into AlphaTab '//' comments.
+ */
+function normalizeAlphaTexLineComment(line: string): string {
+    let inQuote: string | null = null;
+    const len = line.length;
+    for (let i = 0; i < len; i++) {
+        const ch = line[i];
+        if (inQuote) {
+            if (ch === "\\" && i + 1 < len) {
+                i++;
+                continue;
+            }
+            if (ch === inQuote) {
+                inQuote = null;
+            }
+            continue;
+        }
+        if (ch === '"' || ch === "'") {
+            inQuote = ch;
+            continue;
+        }
+        if (ch === "/" && line[i + 1] === "/") {
+            return line;
+        }
+        if (ch === "%") {
+            return `${line.slice(0, i)}//${line.slice(i + 1)}`;
+        }
+    }
+    return line;
+}
+
+/**
+ * Strips '//' and '%' line comments outside of quoted strings from a single line.
+ */
+function stripAlphaTexLineComment(line: string): string {
+    let inQuote: string | null = null;
+    const len = line.length;
+    for (let i = 0; i < len; i++) {
+        const ch = line[i];
+        if (inQuote) {
+            if (ch === "\\" && i + 1 < len) {
+                i++;
+                continue;
+            }
+            if (ch === inQuote) {
+                inQuote = null;
+            }
+            continue;
+        }
+        if (ch === '"' || ch === "'") {
+            inQuote = ch;
+            continue;
+        }
+        if ((ch === "/" && line[i + 1] === "/") || ch === "%") {
+            return line.slice(0, i).trim();
+        }
+    }
+    return line.trim();
+}
+
+/**
+ * Joins tokenized AlphaTex tokens back into a line while keeping chord parentheses tight.
+ */
+function joinAlphaTexTokens(tokens: string[]): string {
+    let out = "";
+    for (let i = 0; i < tokens.length; i++) {
+        const tok = tokens[i];
+        if (!tok) continue;
+        if (i === 0) {
+            out = tok;
+            continue;
+        }
+        const prev = tokens[i - 1];
+        if (prev === "(" || tok.startsWith(")")) {
+            out += tok;
+        } else {
+            out += " " + tok;
+        }
+    }
+    return out.trim();
+}
+
+/**
+ * Converts dotted duration suffixes (e.g. "7.5.4.", "(5.4 5.3).4. { d }", "(0.4 0.3).2.", "r.4.")
+ * into AlphaTab 1.8's "{ d }" beat effect syntax so AlphaTab's parser does not misinterpret
+ * trailing duration dots as section-separator '.' tokens.
+ */
+function normalizeAlphaTexDottedLine(line: string): string {
+    const trimmed = line.trim();
+    if (
+        !trimmed ||
+        trimmed === "." ||
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("%") ||
+        HEADER_DIRECTIVE_LINE_REGEX.test(trimmed)
+    ) {
+        return line;
+    }
+
+    const tokens = tokenizeAlphaTexLine(trimmed);
+    let inChord = false;
+    let mutated = false;
+    const out: string[] = [];
+
+    const ensureDotEffect = (dotProp: "d" | "dd", nextIdx: number) => {
+        mutated = true;
+        if (
+            nextIdx < tokens.length &&
+            tokens[nextIdx].startsWith("{") &&
+            tokens[nextIdx].endsWith("}")
+        ) {
+            const inner = tokens[nextIdx].slice(1, -1).trim();
+            if (!/(?:^|\s)dd?(?:\s|$)/i.test(inner)) {
+                tokens[nextIdx] = inner ? `{ ${dotProp} ${inner} }` : `{ ${dotProp} }`;
+            }
+        } else {
+            out.push(`{ ${dotProp} }`);
+        }
+    };
+
+    for (let i = 0; i < tokens.length; i++) {
+        const tok = tokens[i];
+        if (tok.startsWith("//")) {
+            out.push(tok);
+            continue;
+        }
+        if (tok === "(") {
+            inChord = true;
+            out.push(tok);
+            continue;
+        }
+        if (tok.startsWith(")")) {
+            inChord = false;
+            const chordDotMatch = tok.match(/^\)(?:\.(\d+))?\.(\.)?(\*\d+)?$/);
+            if (chordDotMatch) {
+                const cleanTok =
+                    ")" +
+                    (chordDotMatch[1] ? `.${chordDotMatch[1]}` : "") +
+                    (chordDotMatch[3] ?? "");
+                out.push(cleanTok);
+                ensureDotEffect(chordDotMatch[2] ? "dd" : "d", i + 1);
+                continue;
+            }
+            if (tok === ")" && i + 1 < tokens.length) {
+                const sepDotMatch = tokens[i + 1].match(/^\.(\d+)\.(\.)?(\*\d+)?$/);
+                if (sepDotMatch) {
+                    i++;
+                    out.push(`).${sepDotMatch[1]}${sepDotMatch[3] ?? ""}`);
+                    ensureDotEffect(sepDotMatch[2] ? "dd" : "d", i + 1);
+                    continue;
+                }
+            }
+            out.push(tok);
+            continue;
+        }
+
+        if (!inChord) {
+            const rangeDotMatch = tok.match(/^:(\d+)\.(\.)?$/);
+            if (rangeDotMatch) {
+                mutated = true;
+                out.push(`:${rangeDotMatch[1]}`);
+                continue;
+            }
+
+            const coordDotMatch = tok.match(
+                /^((?:\d{1,2}|x|-)\.[1-8](?:\.\d+)?)\.(\.)?(\*\d+)?$/i,
+            );
+            if (coordDotMatch) {
+                out.push(`${coordDotMatch[1]}${coordDotMatch[3] ?? ""}`);
+                ensureDotEffect(coordDotMatch[2] ? "dd" : "d", i + 1);
+                continue;
+            }
+
+            const restDotMatch = tok.match(/^(r(?:\.\d+)?)\.(\.)?(\*\d+)?$/i);
+            if (restDotMatch) {
+                out.push(`${restDotMatch[1]}${restDotMatch[3] ?? ""}`);
+                ensureDotEffect(restDotMatch[2] ? "dd" : "d", i + 1);
+                continue;
+            }
+
+            const pitchDotMatch = tok.match(
+                /^([A-Ga-g][#b]{0,2}-?\d(?:\.\d+)?)\.(\.)?(\*\d+)?$/,
+            );
+            if (pitchDotMatch) {
+                out.push(`${pitchDotMatch[1]}${pitchDotMatch[3] ?? ""}`);
+                ensureDotEffect(pitchDotMatch[2] ? "dd" : "d", i + 1);
+                continue;
+            }
+        }
+
+        out.push(tok);
+    }
+
+    return mutated ? joinAlphaTexTokens(out) : line;
+}
+
+/**
+ * Normalizes raw AlphaTex source by:
+ * 1. Converting '%' comments outside quotes to '//' comments so AlphaTab's parser accepts them.
+ * 2. Splitting glued leading '.' separators (e.g. '.\title' or '.:4') onto their own line.
+ * 3. Converting dotted duration suffixes ('.4.', '7.5.4.') into AlphaTab '{ d }' beat properties.
+ * 4. Removing redundant empty default headers (e.g. '\title "New Song"\n.') when followed by another header.
+ */
+export function normalizeAlphaTexSource(source: string): string {
+    if (!source || typeof source !== "string") return "";
+
+    const rawLines = source.split("\n");
+    const expandedLines: string[] = [];
+
+    for (const rawLine of rawLines) {
+        const normalizedLine = normalizeAlphaTexLineComment(rawLine);
+        const trimmed = normalizedLine.trim();
+        // If a line starts with '.' immediately glued to a directive, duration, chord, or note (e.g. '.\title', '.:4')
+        if (/^\.(?=\\|:|\(|r\b|[A-Ga-g][#b]?\d|\d{1,2}\.[1-8])/.test(trimmed)) {
+            expandedLines.push(".");
+            expandedLines.push(normalizeAlphaTexDottedLine(trimmed.slice(1).trim()));
+        } else {
+            expandedLines.push(normalizeAlphaTexDottedLine(normalizedLine));
+        }
+    }
+
+    // Check if there are standalone '.' lines where the section before the first '.'
+    // is a redundant header followed by another pasted header.
+    const dotIndices: number[] = [];
+    for (let i = 0; i < expandedLines.length; i++) {
+        if (expandedLines[i].trim() === ".") {
+            dotIndices.push(i);
+        }
+    }
+
+    if (dotIndices.length >= 2) {
+        const firstDot = dotIndices[0];
+        const secondDot = dotIndices[1];
+        const beforeFirstDot = expandedLines
+            .slice(0, firstDot)
+            .map((l) => stripAlphaTexLineComment(l))
+            .filter((l) => l.length > 0);
+        const betweenDots = expandedLines
+            .slice(firstDot + 1, secondDot)
+            .map((l) => stripAlphaTexLineComment(l))
+            .filter((l) => l.length > 0);
+
+        const allBeforeAreHeaders = beforeFirstDot.every((l) =>
+            HEADER_DIRECTIVE_LINE_REGEX.test(l),
+        );
+        const allBetweenAreHeaders =
+            betweenDots.length > 0 &&
+            betweenDots.every((l) => HEADER_DIRECTIVE_LINE_REGEX.test(l));
+
+        if (allBeforeAreHeaders && allBetweenAreHeaders) {
+            const hasSecondTitle = betweenDots.some((l) => /^\\title\b/i.test(l));
+            const isDefaultFirstHeader =
+                beforeFirstDot.length === 1 &&
+                /^\\title\s+["']New Song["']$/i.test(beforeFirstDot[0]);
+            if (isDefaultFirstHeader || hasSecondTitle) {
+                return expandedLines.slice(firstDot + 1).join("\n");
+            }
+            return [
+                ...expandedLines.slice(0, firstDot),
+                ...expandedLines.slice(firstDot + 1),
+            ].join("\n");
+        }
+    } else if (dotIndices.length === 1) {
+        const firstDot = dotIndices[0];
+        const beforeFirstDot = expandedLines
+            .slice(0, firstDot)
+            .map((l) => stripAlphaTexLineComment(l))
+            .filter((l) => l.length > 0);
+        const afterFirstDot = expandedLines
+            .slice(firstDot + 1)
+            .map((l) => stripAlphaTexLineComment(l))
+            .filter((l) => l.length > 0);
+
+        const isDefaultFirstHeader =
+            beforeFirstDot.length === 1 &&
+            /^\\title\s+["']New Song["']$/i.test(beforeFirstDot[0]);
+        if (isDefaultFirstHeader && afterFirstDot.length > 0 && /^\\title\b/i.test(afterFirstDot[0])) {
+            return expandedLines.slice(firstDot + 1).join("\n");
+        }
+    }
+
+    return expandedLines.join("\n");
+}
+
+/**
+ * Tokenizes a single AlphaTex line while keeping quoted strings ("...") and
+ * braced effect/property blocks ({...}) intact so their contents are never
+ * split or misinterpreted as notes.
+ */
+function tokenizeAlphaTexLine(line: string): string[] {
+    const tokens: string[] = [];
+    let current = "";
+    let i = 0;
+    const len = line.length;
+
+    const flush = () => {
+        if (current.length > 0) {
+            tokens.push(current);
+            current = "";
+        }
+    };
+
+    while (i < len) {
+        const ch = line[i];
+
+        // Line comment '//' or '%' outside quotes
+        if ((ch === "/" && line[i + 1] === "/") || ch === "%") {
+            flush();
+            const commentBody = ch === "%" ? `//${line.slice(i + 1)}` : line.slice(i);
+            tokens.push(commentBody.trim());
+            break;
+        }
+
+        // If '.' at the start of a token is immediately followed by ':' or '\', flush '.' as its own separator token
+        if (current === "." && (ch === ":" || ch === "\\")) {
+            flush();
+        }
+
+        // Whitespace
+        if (/\s/.test(ch)) {
+            flush();
+            i++;
+            continue;
+        }
+
+        // Quoted string ("..." or '...')
+        if (ch === '"' || ch === "'") {
+            flush();
+            const quote = ch;
+            let str = ch;
+            i++;
+            while (i < len) {
+                const c = line[i];
+                str += c;
+                i++;
+                if (c === "\\" && i < len) {
+                    str += line[i];
+                    i++;
+                } else if (c === quote) {
+                    break;
+                }
+            }
+            tokens.push(str);
+            continue;
+        }
+
+        // Braced block {...} (beat/note effects like {v}, {b (0 4)}, {score})
+        if (ch === "{") {
+            flush();
+            let depth = 1;
+            let block = "{";
+            i++;
+            while (i < len && depth > 0) {
+                const c = line[i];
+                if (c === "{") depth++;
+                else if (c === "}") depth--;
+                block += c;
+                i++;
+            }
+            tokens.push(block);
+            continue;
+        }
+
+        // Chord open '('
+        if (ch === "(") {
+            flush();
+            tokens.push("(");
+            i++;
+            continue;
+        }
+
+        // Chord close ')' with optional attached duration/multiplier suffix like ').8' or ')*4'
+        if (ch === ")") {
+            flush();
+            let closeTok = ")";
+            i++;
+            while (i < len && /[0-9.*]/.test(line[i])) {
+                closeTok += line[i];
+                i++;
+            }
+            tokens.push(closeTok);
+            continue;
+        }
+
+        // Bar line '|'
+        if (ch === "|") {
+            flush();
+            tokens.push("|");
+            i++;
+            continue;
+        }
+
+        current += ch;
+        i++;
+    }
+
+    flush();
+    return tokens;
+}
+
 // --- STATE MANAGEMENT ---
 
 /**
@@ -92,15 +598,19 @@ class RhythmState {
     public inTuplet: boolean = false;
     private tupletRatio: number = 1;
 
-    constructor() { }
+    constructor() {}
 
     public setTimeSignature(num: number, den: number) {
-        this.limit = num * (1 / den);
+        if (num > 0 && den > 0) {
+            this.limit = num * (1 / den);
+        }
         this.resetAccumulator();
     }
 
     public setDuration(val: number) {
-        this.currentDuration = val;
+        if (val > 0) {
+            this.currentDuration = val;
+        }
     }
 
     public startTuplet(n: number) {
@@ -113,26 +623,29 @@ class RhythmState {
         this.tupletRatio = 1;
     }
 
-    public addNote(token: string) {
-        // Durations inside a chord stack do not advance the timeline
+    public addBeat(isDottedCurrent: boolean = false, multiplier: number = 1) {
         if (this.inChord) return;
 
         let duration = this.currentDuration;
-
-        // CRITICAL CHECK: Dotted Note vs. Guitar String Coordinate
-        // "3.5" means Fret 3 on String 5 (No duration change)
-        // "r." or ":4." means Dotted duration
-        const isGuitarCoord = REGEX_GUITAR_COORD.test(token);
-
-        if (!isGuitarCoord && token.includes('.') && !token.includes(',')) {
+        if (isDottedCurrent) {
             duration *= 1.5;
         }
-
         if (this.inTuplet) {
             duration *= this.tupletRatio;
         }
 
-        this.accumulator += duration;
+        this.accumulator += duration * Math.max(1, multiplier);
+    }
+
+    public addNote(token: string) {
+        if (this.inChord) return;
+        const parsed = parseNoteOrRestToken(token);
+        if (!parsed) return;
+
+        if (parsed.explicitDuration !== null) {
+            this.setDuration(parsed.explicitDuration);
+        }
+        this.addBeat(parsed.isDottedCurrent, parsed.multiplier);
     }
 
     public shouldInsertBar(): boolean {
@@ -140,7 +653,7 @@ class RhythmState {
         if (this.inChord || this.inTuplet) return false;
 
         // Use epsilon for floating point comparison stability
-        if (this.accumulator >= (this.limit - 0.001)) {
+        if (this.accumulator >= this.limit - 0.001) {
             this.accumulator = 0;
             return true;
         }
@@ -155,121 +668,403 @@ class RhythmState {
     }
 }
 
+/**
+ * Checks whether the Next non-empty line in the array begins with an explicit bar line '|'.
+ */
+function nextLineStartsWithBar(lines: string[], currentLineIndex: number): boolean {
+    for (let idx = currentLineIndex + 1; idx < lines.length; idx++) {
+        const t = lines[idx].trim();
+        if (!t) continue;
+        return t.startsWith("|");
+    }
+    return false;
+}
+
 // --- MAIN ORCHESTRATOR ---
+
+// Simple memoization caches to avoid re-parsing the same AlphaTex string across multiple components
+let lastInjectSource = "";
+let lastInjectResult = "";
 
 /**
  * Scans the AlphaTex source code and automatically injects bar lines ('|')
  * when the measure duration limit is reached.
  */
 export function injectBars(source: string): string {
-    if (!source) return "";
+    if (!source || typeof source !== "string") return "";
+    if (source === lastInjectSource) return lastInjectResult;
 
-    const lines = source.split('\n');
+    const normalizedSource = normalizeAlphaTexSource(source);
+    const lines = normalizedSource.split("\n");
+    const tokenizedLines = lines.map((line) => tokenizeAlphaTexLine(line.trim()));
+
+    // Detect if the score contains an explicit '.' header/body separator token anywhere
+    const hasExplicitDotSeparator = tokenizedLines.some((tokens) => tokens.includes("."));
+
     const state = new RhythmState();
-    let result: string[] = [];
+    const result: string[] = [];
 
     // Tracks if we are currently parsing the metadata header
-    let isHeader = true;
+    let isHeader = hasExplicitDotSeparator;
 
-    lines.forEach(line => {
-        const trimmed = line.trim();
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+        const trimmed = lines[lineIdx].trim();
+        const tokens = tokenizedLines[lineIdx];
 
-        // 1. Detect Header/Body transition
-        if (trimmed === '.') {
+        if (!trimmed) {
+            result.push("");
+            continue;
+        }
+
+        // 1. Standalone '.' line transitions from Header to Body
+        if (trimmed === ".") {
             isHeader = false;
             state.resetAccumulator();
-            result.push(trimmed);
-            return;
+            result.push(".");
+            continue;
         }
 
-        // 2. Parse Header (Looking for initial Time Signature)
-        if (isHeader) {
+        // 2. Pure comment line in header or body passes through untouched
+        if (trimmed.startsWith("//") || trimmed.startsWith("%")) {
+            result.push(normalizeAlphaTexLineComment(trimmed));
+            continue;
+        }
+
+        // 3. If there is no '.' separator in the document, keep leading metadata lines intact
+        if (!hasExplicitDotSeparator && HEADER_DIRECTIVE_LINE_REGEX.test(trimmed)) {
             const ts = parseTimeSignature(trimmed);
             if (ts) state.setTimeSignature(ts.num, ts.den);
-
             result.push(trimmed);
-            return;
+            continue;
         }
 
-        // --- PARSE BODY ---
-
-        // Check for inline Time Signature changes
-        const ts = parseTimeSignature(trimmed);
-        if (ts) {
-            state.setTimeSignature(ts.num, ts.den);
+        // 4. Pure header line (before standalone '.' line and with no inline '.' token)
+        if (isHeader && !tokens.includes(".")) {
+            const ts = parseTimeSignature(trimmed);
+            if (ts) state.setTimeSignature(ts.num, ts.den);
             result.push(trimmed);
-            return;
+            continue;
         }
 
-        let newLine = "";
+        // 5. Standalone inline '\ts N D' line
+        if (/^\\ts\s+\d+\s+\d+$/i.test(trimmed)) {
+            const ts = parseTimeSignature(trimmed);
+            if (ts) state.setTimeSignature(ts.num, ts.den);
+            result.push(trimmed);
+            continue;
+        }
 
-        // Normalize structural tokens for easier splitting
-        const tokens = trimmed
-            .replace(/{/g, " { ")
-            .replace(/}/g, " } ")
-            .replace(/\(/g, " ( ")
-            .replace(/\)/g, " ) ")
-            .split(/\s+/);
+        // --- PARSE TOKENS (Supports both inline '.' transition and body notation) ---
+        const outTokens: string[] = [];
 
-        // Process tokens sequentially
         for (let i = 0; i < tokens.length; i++) {
             const token = tokens[i];
             if (!token) continue;
 
-            // A. Tuplet Start
-            if (token === '\\tuplet') {
-                const nextToken = tokens[i + 1];
-                if (nextToken && !isNaN(parseInt(nextToken))) {
-                    state.startTuplet(parseInt(nextToken));
+            // Handle inline header-to-body transition '.'
+            if (isHeader) {
+                outTokens.push(token);
+                if (token.toLowerCase() === "\\ts") {
+                    const num = parseInt(tokens[i + 1] ?? "", 10);
+                    const den = parseInt(tokens[i + 2] ?? "", 10);
+                    if (!isNaN(num) && !isNaN(den)) {
+                        state.setTimeSignature(num, den);
+                    }
+                } else if (token === ".") {
+                    isHeader = false;
+                    state.resetAccumulator();
                 }
-                newLine += token + " ";
                 continue;
             }
 
-            // B. Duration Changes
+            // Comments pass through
+            if (token.startsWith("//")) {
+                outTokens.push(token);
+                continue;
+            }
+
+            // A. Directives in body (\tuplet, \ts, \tempo, \instrument, \rc, \staff, \track, etc.)
+            if (token.startsWith("\\")) {
+                const lowerDir = token.toLowerCase();
+                outTokens.push(token);
+
+                if (lowerDir === "\\tuplet") {
+                    const nextToken = tokens[i + 1];
+                    const tupletN = nextToken ? parseInt(nextToken, 10) : NaN;
+                    if (!isNaN(tupletN)) {
+                        state.startTuplet(tupletN);
+                        outTokens.push(nextToken);
+                        i++;
+                        // Optional '\tuplet 3 { ... }' opening brace
+                        if (tokens[i + 1] === "{") {
+                            outTokens.push("{");
+                            i++;
+                        }
+                    }
+                    continue;
+                }
+
+                if (lowerDir === "\\ts") {
+                    const num = parseInt(tokens[i + 1] ?? "", 10);
+                    const den = parseInt(tokens[i + 2] ?? "", 10);
+                    if (!isNaN(num) && !isNaN(den)) {
+                        state.setTimeSignature(num, den);
+                        outTokens.push(tokens[i + 1], tokens[i + 2]);
+                        i += 2;
+                    } else if (
+                        tokens[i + 1] &&
+                        /^(common|half)$/i.test(tokens[i + 1])
+                    ) {
+                        state.setTimeSignature(4, 4);
+                        outTokens.push(tokens[i + 1]);
+                        i++;
+                    }
+                    continue;
+                }
+
+                if (lowerDir === "\\tuning") {
+                    while (
+                        i + 1 < tokens.length &&
+                        /^(?:[A-Ga-g][#b]?\d|piano|none)$/i.test(tokens[i + 1])
+                    ) {
+                        i++;
+                        outTokens.push(tokens[i]);
+                    }
+                    continue;
+                }
+
+                if (DIRECTIVES_WITH_ONE_ARG.has(lowerDir)) {
+                    // Consume non-note argument token if present (e.g. \tempo 120, \instrument 25, \rc 2)
+                    if (
+                        i + 1 < tokens.length &&
+                        tokens[i + 1] !== "|" &&
+                        !tokens[i + 1].startsWith(":") &&
+                        !tokens[i + 1].startsWith("\\")
+                    ) {
+                        i++;
+                        outTokens.push(tokens[i]);
+                    }
+                }
+
+                // Consume any trailing quoted strings or {...} property blocks attached to the directive
+                while (
+                    i + 1 < tokens.length &&
+                    (tokens[i + 1].startsWith('"') ||
+                        tokens[i + 1].startsWith("'") ||
+                        tokens[i + 1].startsWith("{"))
+                ) {
+                    i++;
+                    outTokens.push(tokens[i]);
+                }
+                continue;
+            }
+
+            // B. Duration Changes (:4, :8., etc.)
             const newDuration = parseDuration(token);
-            if (newDuration) {
+            if (newDuration !== null) {
                 state.setDuration(newDuration);
-                newLine += token + " ";
+                outTokens.push(token);
                 continue;
             }
 
             // C. Structure Control
-            if (token === '{') { /* Handled by startTuplet context */ }
-            else if (token === '}') { state.endTuplet(); }
-            else if (token === '(') { state.inChord = true; }
-            else if (token === ')') { state.inChord = false; }
-            else if (token === '|') { state.resetAccumulator(); }
-
-            // D. Note Processing
-            else if (token.match(REGEX_NOTE)) {
-                // Ensure we don't count the tuplet definition number as a note
-                const prevToken = tokens[i - 1];
-                if (prevToken !== '\\tuplet') {
-                    state.addNote(token);
-                }
+            if (token === "}") {
+                state.endTuplet();
+                outTokens.push(token);
+                continue;
             }
 
-            newLine += token + " ";
+            if (token.startsWith("{")) {
+                outTokens.push(token);
+                continue;
+            }
 
-            // E. Bar Injection
-            if (state.shouldInsertBar()) {
-                newLine += "| ";
+            if (token === "(") {
+                state.inChord = true;
+                outTokens.push(token);
+                continue;
+            }
+
+            if (token.startsWith(")")) {
+                state.inChord = false;
+                outTokens.push(token);
+
+                // Parse optional chord duration/multiplier suffix like ').8' or ')*4'
+                const suffix = token.slice(1);
+                let multiplier = 1;
+                let isDotted = false;
+                if (suffix) {
+                    const chordSuffixMatch = suffix.match(/^(?:\.(\d+)(\.?)|(\.))?(?:\*(\d+))?$/);
+                    if (chordSuffixMatch) {
+                        if (chordSuffixMatch[1]) {
+                            const explicitDur = parseDurationValue(chordSuffixMatch[1]);
+                            if (explicitDur !== null) state.setDuration(explicitDur);
+                        }
+                        if (chordSuffixMatch[2] || chordSuffixMatch[3]) {
+                            isDotted = true;
+                        }
+                        if (chordSuffixMatch[4]) {
+                            multiplier = Math.max(1, parseInt(chordSuffixMatch[4], 10));
+                        }
+                    }
+                } else if (
+                    i + 1 < tokens.length &&
+                    /^\.\d+\.?$/.test(tokens[i + 1])
+                ) {
+                    // Space-separated chord duration suffix: '( 0.1 1.2 ) .8'
+                    i++;
+                    outTokens.push(tokens[i]);
+                    const rawDur = tokens[i].slice(1);
+                    if (rawDur.endsWith(".")) isDotted = true;
+                    const explicitDur = parseDurationValue(rawDur.replace(/\./g, ""));
+                    if (explicitDur !== null) state.setDuration(explicitDur);
+                }
+
+                // Keep any trailing beat effects {...} attached before injecting a bar line,
+                // and check if any effect block specifies a dotted beat ('{ d }' or '{ dd }')
+                while (i + 1 < tokens.length && tokens[i + 1].startsWith("{")) {
+                    i++;
+                    outTokens.push(tokens[i]);
+                    if (hasDottedBeatEffect(tokens[i])) {
+                        isDotted = true;
+                    }
+                }
+
+                state.addBeat(isDotted, multiplier);
+
+                if (state.shouldInsertBar()) {
+                    const nextTok = tokens[i + 1];
+                    const hasExistingBarNext =
+                        nextTok === "|" ||
+                        (nextTok === undefined && nextLineStartsWithBar(lines, lineIdx));
+                    if (!hasExistingBarNext) {
+                        outTokens.push("|");
+                    }
+                }
+                continue;
+            }
+
+            if (token === "|") {
+                state.resetAccumulator();
+                outTokens.push("|");
+                continue;
+            }
+
+            // D. Note or Rest Processing
+            const noteInfo = parseNoteOrRestToken(token);
+            outTokens.push(token);
+
+            if (noteInfo !== null) {
+                let isDottedNote = noteInfo.isDottedCurrent;
+
+                // Consume any {...} note/beat effect blocks BEFORE checking for bar injection
+                // so '|' is never placed between a note and its '{...}' effect!
+                while (i + 1 < tokens.length && tokens[i + 1].startsWith("{")) {
+                    i++;
+                    outTokens.push(tokens[i]);
+                    if (hasDottedBeatEffect(tokens[i])) {
+                        isDottedNote = true;
+                    }
+                }
+
+                if (!state.inChord) {
+                    if (noteInfo.explicitDuration !== null) {
+                        state.setDuration(noteInfo.explicitDuration);
+                    }
+                    state.addBeat(isDottedNote, noteInfo.multiplier);
+                }
+
+                if (state.shouldInsertBar()) {
+                    const nextTok = tokens[i + 1];
+                    const hasExistingBarNext =
+                        nextTok === "|" ||
+                        (nextTok === undefined && nextLineStartsWithBar(lines, lineIdx));
+                    if (!hasExistingBarNext) {
+                        outTokens.push("|");
+                    }
+                }
             }
         }
 
-        result.push(newLine.replace(/\s+/g, ' ').trim());
-    });
+        result.push(joinAlphaTexTokens(outTokens));
+    }
 
-    return result.join('\n');
+    lastInjectSource = source;
+    lastInjectResult = result.join("\n");
+    return lastInjectResult;
 }
 
 // --- ALPHATEX DETECTION & RENDER PREPARATION ---
 
-const ALPHATEX_DIRECTIVE_REGEX = /^\\(title|subtitle|artist|album|words|music|copyright|tempo|ts|ks|clef|tuning|instrument|capo|chord|tuplet|staff|track|lyrics)\b/im;
+const ALPHATEX_DIRECTIVE_REGEX =
+    /(?:^|\s)\\(title|subtitle|artist|album|words|music|copyright|tempo|ts|ks|clef|tuning|instrument|capo|chord|tuplet|staff|track|lyrics|ro|rc|ae|ac|jump|section|marker)\b/im;
 const ALPHATEX_DURATION_REGEX = /(?:^|\s):(?:-4|-2|1|2|4|8|16|32|64|128|256)\b/m;
-const ALPHATEX_FRET_STRING_REGEX = /(?:^|\s|\()\d{1,2}\.[1-8](?:\s|\)|$|\||\{)/m;
-const ALPHATEX_PITCH_NOTE_REGEX = /(?:^|\s)[A-Ga-g][#b]?\d(?:\.(?:1|2|4|8|16|32|64))?(?:\s|$|\|)/m;
+const ALPHATEX_FRET_STRING_REGEX =
+    /(?:^|\s|\()(?:\d{1,2}|x|-)\.[1-8](?:\.(?:1|2|4|8|16|32|64)\.?)?(?:\*\d+)?(?:\s|\)|$|\||\{)/im;
+const ALPHATEX_PITCH_NOTE_REGEX =
+    /(?:^|\s)[A-Ga-g][#b]?\d(?:\.(?:1|2|4|8|16|32|64)\.?)?(?:\*\d+)?(?:\s|$|\||\{)/m;
+
+/**
+ * Splits an AlphaTex source string into its metadata header and musical body,
+ * supporting standalone '.' lines, inline '.' separators, and headerless bodies.
+ * Strips line comments ('//' and '%') from bodyText so comments never corrupt
+ * bar counting or note synthesis.
+ */
+function splitAlphaTexHeaderAndBody(source: string): {
+    hasDotSeparator: boolean;
+    bodyText: string;
+} {
+    if (!source || typeof source !== "string") {
+        return { hasDotSeparator: false, bodyText: "" };
+    }
+
+    const normalized = normalizeAlphaTexSource(source);
+    const lines = normalized.split("\n").map((l) => stripAlphaTexLineComment(l));
+    const dotLineIdx = lines.indexOf(".");
+    if (dotLineIdx !== -1) {
+        const bodyLines = lines
+            .slice(dotLineIdx + 1)
+            .filter((l) => l.length > 0 && l !== ".");
+        return {
+            hasDotSeparator: true,
+            bodyText: bodyLines.join("\n").trim(),
+        };
+    }
+
+    // Check for inline '.' token outside quotes/braces
+    const bodyParts: string[] = [];
+    let foundInlineDot = false;
+    for (const line of lines) {
+        if (!line) continue;
+        if (foundInlineDot) {
+            bodyParts.push(line);
+            continue;
+        }
+        const tokens = tokenizeAlphaTexLine(line);
+        const inlineDotIdx = tokens.indexOf(".");
+        if (inlineDotIdx !== -1) {
+            foundInlineDot = true;
+            const afterDot = tokens.slice(inlineDotIdx + 1).join(" ").trim();
+            if (afterDot) bodyParts.push(afterDot);
+        }
+    }
+
+    if (foundInlineDot) {
+        return {
+            hasDotSeparator: true,
+            bodyText: bodyParts.join("\n").trim(),
+        };
+    }
+
+    // No '.' separator: body consists of non-metadata lines
+    const nonHeaderLines = lines.filter(
+        (l) => l.length > 0 && !HEADER_DIRECTIVE_LINE_REGEX.test(l),
+    );
+    return {
+        hasDotSeparator: false,
+        bodyText: nonHeaderLines.join("\n").trim(),
+    };
+}
 
 /**
  * Determines whether the editor text contains AlphaTex notation.
@@ -303,6 +1098,11 @@ export function looksLikeAlphaTex(source: string): boolean {
         return true;
     }
 
+    // Bare bar lines or rests or chords
+    if (/(?:^|\s)\|(?:\s|$)/.test(trimmed)) {
+        return true;
+    }
+
     // Header separator line '.' followed by notes, rests, or bars
     const lines = trimmed.split("\n").map((l) => l.trim());
     if (lines.includes(".")) {
@@ -314,8 +1114,9 @@ export function looksLikeAlphaTex(source: string): boolean {
 
 /**
  * Normalizes and prepares AlphaTex text for AlphaTab rendering.
- * Injects automatic bar lines when enabled and ensures header-only templates
- * have at least one valid rest measure so the staff renders immediately.
+ * Converts '%' comments to '//', cleans up redundant default headers, and
+ * injects automatic bar lines when enabled. Returns "" when no musical body
+ * notes/bars exist yet so a blank/header-only editor does not render a fake default score.
  */
 export function prepareAlphaTexForRender(
     source: string,
@@ -325,18 +1126,13 @@ export function prepareAlphaTexForRender(
     const trimmed = source.trim();
     if (!trimmed || !looksLikeAlphaTex(trimmed)) return "";
 
-    const processed = autoBarEnabled ? injectBars(trimmed) : trimmed;
-    const lines = processed.split("\n").map((l) => l.trim());
-    const dotIndex = lines.indexOf(".");
+    const normalized = normalizeAlphaTexSource(trimmed);
+    const processed = autoBarEnabled ? injectBars(normalized) : normalized;
+    const { bodyText } = splitAlphaTexHeaderAndBody(processed);
 
-    if (dotIndex !== -1) {
-        const bodyContent = lines
-            .slice(dotIndex + 1)
-            .join(" ")
-            .trim();
-        if (!bodyContent) {
-            return `${processed}\n:1 r |`;
-        }
+    // Do not render a fake default score if there are no body notes, chords, or bars written yet
+    if (!bodyText) {
+        return "";
     }
 
     return processed;
@@ -363,6 +1159,9 @@ export interface PlaybackSyncState {
     scoreProgress: number; // 0..1 across entire score
 }
 
+let lastMetaKey = "";
+let lastMetaResult: ScoreMetadata | null = null;
+
 /**
  * Extracts musical timing metadata (BPM, time signature, measure count, duration)
  * from an AlphaTex source string.
@@ -372,6 +1171,11 @@ export function extractScoreMetadata(
     fallbackBpm: number = 120,
     fallbackTimeSignature: string = "4/4",
 ): ScoreMetadata {
+    const cacheKey = `${fallbackBpm}|${fallbackTimeSignature}|${source || ""}`;
+    if (cacheKey === lastMetaKey && lastMetaResult) {
+        return lastMetaResult;
+    }
+
     let bpm = fallbackBpm > 0 ? fallbackBpm : 120;
     let tsNum = 4;
     let tsDen = 4;
@@ -382,34 +1186,38 @@ export function extractScoreMetadata(
         if (!isNaN(d) && d > 0) tsDen = d;
     }
 
-    if (source && typeof source === "string") {
-        const tempoMatch = source.match(/(?:\\tempo|^tempo)\s+(\d+)/im);
-        if (tempoMatch) {
-            const parsedTempo = parseInt(tempoMatch[1], 10);
+    const normalized = source && typeof source === "string" ? normalizeAlphaTexSource(source) : "";
+
+    if (normalized) {
+        const tempoMatches = [...normalized.matchAll(/(?:\\tempo|^tempo)\s+(\d+)/gim)];
+        if (tempoMatches.length > 0) {
+            const parsedTempo = parseInt(tempoMatches[tempoMatches.length - 1][1], 10);
             if (!isNaN(parsedTempo) && parsedTempo > 0) {
                 bpm = parsedTempo;
             }
         }
 
-        const tsMatch = source.match(/\\ts\s+(\d+)\s+(\d+)/i);
-        if (tsMatch) {
-            const parsedNum = parseInt(tsMatch[1], 10);
-            const parsedDen = parseInt(tsMatch[2], 10);
+        const tsMatches = [...normalized.matchAll(/\\ts\s+(\d+)\s+(\d+)/gi)];
+        if (tsMatches.length > 0) {
+            const lastTs = tsMatches[tsMatches.length - 1];
+            const parsedNum = parseInt(lastTs[1], 10);
+            const parsedDen = parseInt(lastTs[2], 10);
             if (!isNaN(parsedNum) && parsedNum > 0) tsNum = parsedNum;
             if (!isNaN(parsedDen) && parsedDen > 0) tsDen = parsedDen;
         }
     }
 
-    const processed = source ? injectBars(source) : "";
-    const lines = processed.split("\n").map((l) => l.trim());
-    const dotIdx = lines.indexOf(".");
-    const bodyText = (dotIdx !== -1 ? lines.slice(dotIdx + 1) : lines.filter((l) => !l.startsWith("\\")))
-        .join(" ")
-        .trim();
+    const processed = normalized ? injectBars(normalized) : "";
+    const { bodyText } = splitAlphaTexHeaderAndBody(processed);
 
     let barCount = 1;
     if (bodyText) {
-        const segments = bodyText
+        // Strip metadata/track directives before counting non-empty bar segments
+        const cleanBody = bodyText
+            .split("\n")
+            .filter((l) => !HEADER_DIRECTIVE_LINE_REGEX.test(l.trim()))
+            .join(" ");
+        const segments = cleanBody
             .split("|")
             .map((s) => s.trim())
             .filter((s) => s.length > 0);
@@ -421,7 +1229,8 @@ export function extractScoreMetadata(
     const secondsPerBar = beatsPerBar * secondsPerBeat;
     const estimatedDurationSeconds = barCount * secondsPerBar;
 
-    return {
+    lastMetaKey = cacheKey;
+    lastMetaResult = {
         bpm,
         timeSignature: { num: tsNum, den: tsDen },
         barCount,
@@ -430,6 +1239,7 @@ export function extractScoreMetadata(
         secondsPerBar,
         estimatedDurationSeconds,
     };
+    return lastMetaResult;
 }
 
 /**
@@ -487,7 +1297,7 @@ export function getTimestampForBar(
     return safeBar * secondsPerBar;
 }
 
-// Standard 6-string guitar tuning MIDI numbers: String 1 (E4=64) down to String 6 (E2=40)
+// Standard guitar/bass tuning MIDI numbers: String 1 (E4=64) down to String 8
 const STANDARD_GUITAR_STRING_MIDI: Record<number, number> = {
     1: 64, // E4
     2: 59, // B3
@@ -495,6 +1305,18 @@ const STANDARD_GUITAR_STRING_MIDI: Record<number, number> = {
     4: 50, // D3
     5: 45, // A2
     6: 40, // E2
+    7: 35, // B1
+    8: 30, // F#1
+};
+
+const PITCH_CLASS_SEMITONES: Record<string, number> = {
+    c: 0,
+    d: 2,
+    e: 4,
+    f: 5,
+    g: 7,
+    a: 9,
+    b: 11,
 };
 
 export interface ScheduledAlphaTexEvent {
@@ -504,39 +1326,52 @@ export interface ScheduledAlphaTexEvent {
     barIndex: number;
 }
 
+let lastPlayableKey = "";
+let lastPlayableResult: {
+    events: ScheduledAlphaTexEvent[];
+    durationSeconds: number;
+    metadata: ScoreMetadata;
+} | null = null;
+
 /**
  * Parses an AlphaTex string into a timeline of playable note/chord events
- * for real-time Web Audio synthesis when playing the score directly.
+ * for real-time Web Audio synthesis when playing the score directly or alongside a recorded take.
  */
 export function parsePlayableNotesFromAlphaTex(
     source: string,
     fallbackBpm: number = 120,
 ): { events: ScheduledAlphaTexEvent[]; durationSeconds: number; metadata: ScoreMetadata } {
+    const cacheKey = `${fallbackBpm}|${source || ""}`;
+    if (cacheKey === lastPlayableKey && lastPlayableResult) {
+        return lastPlayableResult;
+    }
+
     const metadata = extractScoreMetadata(source, fallbackBpm);
     if (!source || !looksLikeAlphaTex(source)) {
         return { events: [], durationSeconds: 0, metadata };
     }
 
     const processed = injectBars(source);
-    const lines = processed.split("\n").map((l) => l.trim());
-    const dotIdx = lines.indexOf(".");
-    const bodyLines = dotIdx !== -1 ? lines.slice(dotIdx + 1) : lines.filter((l) => !l.startsWith("\\"));
-    const bodyText = bodyLines.join(" ").trim();
+    const { bodyText } = splitAlphaTexHeaderAndBody(processed);
 
     if (!bodyText) {
         return {
             events: [],
-            durationSeconds: metadata.estimatedDurationSeconds,
+            durationSeconds: 0,
             metadata,
         };
     }
 
-    const tokens = bodyText
-        .replace(/\(/g, " ( ")
-        .replace(/\)/g, " ) ")
-        .replace(/\|/g, " | ")
-        .split(/\s+/)
-        .filter(Boolean);
+    // Tokenize line by line so line comments never swallow following lines
+    const tokens: string[] = [];
+    for (const line of bodyText.split("\n")) {
+        const lineTokens = tokenizeAlphaTexLine(line.trim());
+        for (const tok of lineTokens) {
+            if (!tok.startsWith("//") && !tok.startsWith("%")) {
+                tokens.push(tok);
+            }
+        }
+    }
 
     const events: ScheduledAlphaTexEvent[] = [];
     const wholeNoteSeconds = (60 / metadata.bpm) * 4;
@@ -547,14 +1382,26 @@ export function parsePlayableNotesFromAlphaTex(
     let chordMidiNotes: number[] = [];
 
     function tokenToMidi(tok: string): number | null {
-        const coordMatch = tok.match(/^(\d{1,2})\.([1-6])$/);
+        const coordMatch = tok.match(/^(\d{1,2})\.([1-8])(?:\.\d+\.?)?(?:\*\d+)?$/);
         if (coordMatch) {
             const fret = parseInt(coordMatch[1], 10);
             const str = parseInt(coordMatch[2], 10);
             const baseMidi = STANDARD_GUITAR_STRING_MIDI[str] ?? 40;
             return baseMidi + fret;
         }
-        const fretOnlyMatch = tok.match(/^(\d{1,2})$/);
+        const pitchMatch = tok.match(/^([A-Ga-g])([#b]{0,2})(-?\d)(?:\.\d+\.?)?(?:\*\d+)?$/);
+        if (pitchMatch) {
+            const base = PITCH_CLASS_SEMITONES[pitchMatch[1].toLowerCase()] ?? 0;
+            const accidentals = pitchMatch[2];
+            let accOffset = 0;
+            for (const ch of accidentals) {
+                if (ch === "#") accOffset += 1;
+                else if (ch === "b") accOffset -= 1;
+            }
+            const octave = parseInt(pitchMatch[3], 10);
+            return (octave + 1) * 12 + base + accOffset;
+        }
+        const fretOnlyMatch = tok.match(/^(\d{1,2})\.?(?:\*\d+)?$/);
         if (fretOnlyMatch) {
             const fret = parseInt(fretOnlyMatch[1], 10);
             return 52 + fret; // E3 base
@@ -564,6 +1411,32 @@ export function parsePlayableNotesFromAlphaTex(
 
     for (let i = 0; i < tokens.length; i++) {
         const token = tokens[i];
+
+        if (
+            token === "." ||
+            token.startsWith("{") ||
+            token.startsWith('"') ||
+            token.startsWith("'")
+        ) {
+            continue;
+        }
+
+        if (token.startsWith("\\")) {
+            const lowerDir = token.toLowerCase();
+            if (lowerDir === "\\ts") {
+                i += 2;
+            } else if (DIRECTIVES_WITH_ONE_ARG.has(lowerDir) || lowerDir === "\\tuplet") {
+                if (
+                    i + 1 < tokens.length &&
+                    tokens[i + 1] !== "|" &&
+                    !tokens[i + 1].startsWith(":") &&
+                    !tokens[i + 1].startsWith("\\")
+                ) {
+                    i += 1;
+                }
+            }
+            continue;
+        }
 
         const dur = parseDuration(token);
         if (dur !== null) {
@@ -582,18 +1455,55 @@ export function parsePlayableNotesFromAlphaTex(
             continue;
         }
 
-        if (token === ")") {
+        if (token.startsWith(")")) {
             inChord = false;
-            const durSecs = currentNoteFraction * wholeNoteSeconds;
-            if (chordMidiNotes.length > 0) {
-                events.push({
-                    startTimeSeconds: currentTime,
-                    durationSeconds: durSecs,
-                    midiNotes: [...chordMidiNotes],
-                    barIndex: currentBar,
-                });
+            const suffix = token.slice(1);
+            let multiplier = 1;
+            let isDotted = false;
+            if (suffix) {
+                const chordSuffixMatch = suffix.match(/^(?:\.(\d+)(\.?)|(\.))?(?:\*(\d+))?$/);
+                if (chordSuffixMatch) {
+                    if (chordSuffixMatch[1]) {
+                        const explicitDur = parseDurationValue(chordSuffixMatch[1]);
+                        if (explicitDur !== null) currentNoteFraction = explicitDur;
+                    }
+                    if (chordSuffixMatch[2] || chordSuffixMatch[3]) {
+                        isDotted = true;
+                    }
+                    if (chordSuffixMatch[4]) {
+                        multiplier = Math.max(1, parseInt(chordSuffixMatch[4], 10));
+                    }
+                }
+            } else if (
+                i + 1 < tokens.length &&
+                /^\.\d+\.?$/.test(tokens[i + 1])
+            ) {
+                i++;
+                const rawDur = tokens[i].slice(1);
+                if (rawDur.endsWith(".")) isDotted = true;
+                const explicitDur = parseDurationValue(rawDur.replace(/\./g, ""));
+                if (explicitDur !== null) currentNoteFraction = explicitDur;
             }
-            currentTime += durSecs;
+
+            while (i + 1 < tokens.length && tokens[i + 1].startsWith("{")) {
+                i++;
+                if (hasDottedBeatEffect(tokens[i])) {
+                    isDotted = true;
+                }
+            }
+
+            const durSecs = currentNoteFraction * (isDotted ? 1.5 : 1) * wholeNoteSeconds;
+            for (let m = 0; m < multiplier; m++) {
+                if (chordMidiNotes.length > 0) {
+                    events.push({
+                        startTimeSeconds: currentTime,
+                        durationSeconds: durSecs,
+                        midiNotes: [...chordMidiNotes],
+                        barIndex: currentBar,
+                    });
+                }
+                currentTime += durSecs;
+            }
             chordMidiNotes = [];
             continue;
         }
@@ -606,31 +1516,57 @@ export function parsePlayableNotesFromAlphaTex(
             continue;
         }
 
-        if (token === "r" || token.startsWith("r.")) {
-            const isDotted = token.includes(".");
-            const durSecs = currentNoteFraction * (isDotted ? 1.5 : 1) * wholeNoteSeconds;
+        const noteInfo = parseNoteOrRestToken(token);
+        if (noteInfo && noteInfo.explicitDuration !== null) {
+            currentNoteFraction = noteInfo.explicitDuration;
+        }
+
+        if (token === "r" || token.startsWith("r.") || token.startsWith("r*")) {
+            let isDotted = noteInfo ? noteInfo.isDottedCurrent : token === "r.";
+            while (i + 1 < tokens.length && tokens[i + 1].startsWith("{")) {
+                i++;
+                if (hasDottedBeatEffect(tokens[i])) {
+                    isDotted = true;
+                }
+            }
+            const mult = noteInfo ? noteInfo.multiplier : 1;
+            const durSecs = currentNoteFraction * (isDotted ? 1.5 : 1) * wholeNoteSeconds * mult;
             currentTime += durSecs;
             continue;
         }
 
         const midi = tokenToMidi(token);
         if (midi !== null) {
-            const durSecs = currentNoteFraction * wholeNoteSeconds;
-            events.push({
-                startTimeSeconds: currentTime,
-                durationSeconds: durSecs,
-                midiNotes: [midi],
-                barIndex: currentBar,
-            });
-            currentTime += durSecs;
+            const mult = noteInfo ? noteInfo.multiplier : 1;
+            let isDotted = noteInfo ? noteInfo.isDottedCurrent : false;
+            while (i + 1 < tokens.length && tokens[i + 1].startsWith("{")) {
+                i++;
+                if (hasDottedBeatEffect(tokens[i])) {
+                    isDotted = true;
+                }
+            }
+            const durSecs = currentNoteFraction * (isDotted ? 1.5 : 1) * wholeNoteSeconds;
+            for (let m = 0; m < mult; m++) {
+                events.push({
+                    startTimeSeconds: currentTime,
+                    durationSeconds: durSecs,
+                    midiNotes: [midi],
+                    barIndex: currentBar,
+                });
+                currentTime += durSecs;
+            }
         }
     }
 
-    const totalDuration = Math.max(currentTime, metadata.estimatedDurationSeconds);
-    return {
+    const totalDuration = events.length > 0
+        ? Math.max(currentTime, metadata.estimatedDurationSeconds)
+        : 0;
+    lastPlayableKey = cacheKey;
+    lastPlayableResult = {
         events,
         durationSeconds: totalDuration,
         metadata,
     };
+    return lastPlayableResult;
 }
 
