@@ -6,6 +6,7 @@
     import ScoreViewer from "@/components/ScoreViewer.svelte";
     import TrackTabs from "@/components/TrackTabs.svelte";
     import Workbar from "@/components/Workbar.svelte";
+    import AlbumSelector from "@/features/albums/components/AlbumSelector.svelte";
 
     import { songId, song, activeSongStore } from "@/stores/projectStore";
     import { currentView } from "@/stores/viewStore";
@@ -61,7 +62,8 @@
 <div class="layout-wrapper">
     <div class="top-nav">
         <button class="back-btn" on:click={goBack}>← Back to Library</button>
-        <div class="spacer" />
+        <div class="spacer"></div>
+        <AlbumSelector />
     </div>
 
     <TrackTabs />
@@ -86,14 +88,19 @@
         height: 100%;
         width: 100%;
     }
-
+    
     .top-nav {
-        height: 30px;
+        min-height: 46px;
         background-color: #181818;
         border-bottom: 1px solid #333;
         display: flex;
         align-items: center;
-        padding: 0 10px;
+        gap: 12px;
+        padding: 0 14px;
+    }
+
+    .spacer {
+        flex: 1;
     }
 
     .back-btn {
