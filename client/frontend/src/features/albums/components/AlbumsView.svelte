@@ -1,10 +1,11 @@
 
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
-    import { CreateAlbum, GetAlbumSongs, ListAlbums } from "@wails/go/bindings/AlbumHandler";
+    import { CreateAlbum, DeleteAlbum, GetAlbumSongs, ListAlbums, RemoveSongFromAlbum } from "@wails/go/bindings/AlbumHandler";
     import type { models } from "@wails/go/models";
     import type { AlbumData } from "../stores/albumStore";
-    import { songId } from "@/stores/projectStore";
+    import { songId, song } from "@/stores/projectStore";
+    import { Song } from "@shared/types/wails";
     import { currentView } from "@/stores/viewStore";
     import { albumStore } from "../stores/albumStore";
     import { toastStore } from "@shared/stores/toastStore";
@@ -22,6 +23,9 @@
     let isLoadingSongs = false;
     let albumSongsError = "";
     let songsRequestId = 0;
+    let removingSongId: number | null = null;
+    let albumToDelete: AlbumData | null = null;
+    let isDeletingAlbum = false;
 
     onMount(() => {
         void loadAlbums();
@@ -66,6 +70,65 @@
         // Same navigation mechanism already used by Dashboard.svelte.
         songId.set(songToOpen.id);
         currentView.set("editor");
+    }
+    // Only the association is removed; the song, its tracks, and audio stay intact.
+    async function unlinkSong(songToRemove: models.Song) {
+        if (removingSongId !== null || isDeletingAlbum || !selectedAlbum) return;
+
+        const albumId = selectedAlbum.id;
+        removingSongId = songToRemove.id;
+        try {
+            await RemoveSongFromAlbum(songToRemove.id);
+            // Keep the global editor store consistent. Otherwise a subsequent
+            // SaveSong could write the old album_id back to SQLite.
+            song.update((current) => {
+                if (!current || current.id !== songToRemove.id) return current;
+                return new Song({ ...current, album_id: undefined });
+            });
+            if (selectedAlbum?.id === albumId) {
+                albumSongs = albumSongs.filter((item) => item.id !== songToRemove.id);
+            }
+            toastStore.success("Proyecto desvinculado. Sigue disponible en Library.");
+        } catch (error) {
+            console.error("[AlbumsView] Could not unlink song:", error);
+            toastStore.error("No se pudo desvincular el proyecto del álbum.");
+        } finally {
+            removingSongId = null;
+        }
+    }
+
+    function requestDeleteAlbum(album: AlbumData) {
+        if (isDeletingAlbum || removingSongId !== null) return;
+        albumToDelete = album;
+    }
+
+    function cancelDeleteAlbum() {
+        if (!isDeletingAlbum) albumToDelete = null;
+    }
+
+    async function confirmDeleteAlbum() {
+        if (!albumToDelete || isDeletingAlbum || removingSongId !== null) return;
+
+        const albumId = albumToDelete.id;
+        isDeletingAlbum = true;
+        try {
+            await DeleteAlbum(albumId);
+            albumStore.removeAlbum(albumId);
+            // Prevent a later SaveSong from restoring an obsolete album_id.
+            song.update((current) => {
+                if (!current || current.album_id !== albumId) return current;
+                return new Song({ ...current, album_id: undefined });
+            });
+
+            if (selectedAlbum?.id === albumId) backToAlbums();
+            albumToDelete = null;
+            toastStore.success("Álbum eliminado. Tus proyectos y archivos están intactos.");
+        } catch (error) {
+            console.error("[AlbumsView] Could not delete album:", error);
+            toastStore.error("No se pudo eliminar el álbum.");
+        } finally {
+            isDeletingAlbum = false;
+        }
     }
 
     async function loadAlbums() {
@@ -128,13 +191,14 @@
     {#if selectedAlbum}
         <header class="albums-header album-detail-header">
             <div>
-                <button type="button" class="back-button" on:click={backToAlbums}>← Volver a álbumes</button>
+                <button type="button" class="back-button" on:click={backToAlbums} disabled={isDeletingAlbum}>← Volver a álbumes</button>
                 <h1>{selectedAlbum.title}</h1>
                 <p>{selectedAlbum.artist || "Artista sin definir"}</p>
                 {#if selectedAlbum.description}
                     <p class="album-description">{selectedAlbum.description}</p>
                 {/if}
             </div>
+            <button type="button" class="danger-button" disabled={isDeletingAlbum || removingSongId !== null} on:click={() => selectedAlbum && requestDeleteAlbum(selectedAlbum)}>Eliminar álbum</button>
         </header>
 
         {#if isLoadingSongs}
@@ -155,14 +219,19 @@
             <p class="song-count">{albumSongs.length} {albumSongs.length === 1 ? "canción" : "canciones"}</p>
             <div class="song-grid">
                 {#each albumSongs as albumSong (albumSong.id)}
-                    <button type="button" class="song-card" on:click={() => openSong(albumSong)}>
-                        <span class="song-icon" aria-hidden="true">🎵</span>
-                        <span class="song-info">
-                            <strong>{albumSong.title}</strong>
-                            <small>{albumSong.bpm} BPM</small>
-                        </span>
-                        <span class="song-arrow" aria-hidden="true">›</span>
-                    </button>
+                    <div class="song-row">
+                        <button type="button" class="song-card" disabled={removingSongId !== null || isDeletingAlbum} on:click={() => openSong(albumSong)}>
+                            <span class="song-icon" aria-hidden="true">🎵</span>
+                            <span class="song-info">
+                                <strong>{albumSong.title}</strong>
+                                <small>{albumSong.bpm} BPM</small>
+                            </span>
+                            <span class="song-arrow" aria-hidden="true">›</span>
+                        </button>
+                        <button type="button" class="unlink-button" disabled={removingSongId !== null || isDeletingAlbum} aria-label={`Desvincular ${albumSong.title} del álbum`} on:click={() => unlinkSong(albumSong)}>
+                            {removingSongId === albumSong.id ? "Desvinculando..." : "Desvincular"}
+                        </button>
+                    </div>
                 {/each}
             </div>
         {/if}
@@ -221,6 +290,25 @@
                     <button type="submit" class="primary-button" disabled={isSaving}>{isSaving ? "Guardando..." : "Crear álbum"}</button>
                 </div>
             </form>
+        </div>
+    </div>
+{/if}
+
+{#if albumToDelete}
+    <div class="modal-overlay" role="presentation">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-album-title" aria-describedby="delete-album-description">
+            <h2 id="delete-album-title">¿Eliminar álbum?</h2>
+            <p id="delete-album-description">
+                Se eliminará el álbum «{albumToDelete.title}» y se quitará la asociación
+                con sus canciones. <strong>Las canciones, pistas y archivos originales
+                permanecerán en tu biblioteca.</strong>
+            </p>
+            <div class="modal-actions">
+                <button type="button" class="secondary-button" disabled={isDeletingAlbum} on:click={cancelDeleteAlbum}>Cancelar</button>
+                <button type="button" class="danger-button" disabled={isDeletingAlbum} on:click={confirmDeleteAlbum}>
+                    {isDeletingAlbum ? "Eliminando..." : "Sí, eliminar álbum"}
+                </button>
+            </div>
         </div>
     </div>
 {/if}
@@ -497,5 +585,45 @@
         justify-content: flex-end;
         gap: 10px;
         margin-top: 12px;
+    }
+
+    .album-detail-header { align-items: flex-start; }
+    .danger-button {
+        padding: 11px 16px;
+        border: 1px solid #b65d5d;
+        border-radius: 6px;
+        background: #5a2525;
+        color: #fff5f5;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+    .danger-button:hover:not(:disabled) { background: #773333; }
+    .danger-button:disabled, .unlink-button:disabled, .song-card:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+    .song-row { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
+    .song-row .song-card { flex: 1; width: auto; }
+    .unlink-button {
+        padding: 8px 12px;
+        border: 1px solid #725b4a;
+        border-radius: 7px;
+        background: #35291f;
+        color: #ffdbba;
+        font: inherit;
+        font-size: 0.8rem;
+        cursor: pointer;
+    }
+    .unlink-button:hover:not(:disabled) { background: #483426; }
+    .unlink-button:focus-visible, .danger-button:focus-visible {
+        outline: 2px solid #b8ec9a;
+        outline-offset: 2px;
+    }
+    @media (max-width: 600px) {
+        .album-detail-header { flex-wrap: wrap; }
+        .song-row { flex-direction: column; }
+        .unlink-button { align-self: flex-end; }
     }
 </style>
