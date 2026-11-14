@@ -22,9 +22,17 @@
 
     let renderedHtml: string = "";
 
+    function formatChordBadges(raw: string): string {
+        return raw.replace(
+            /\[([A-G][#b]?(?:m|maj|min|dim|aug|sus|add|\d)*(?:\/[A-G][#b]?)?)\]/g,
+            '<span class="chord-badge">$1</span>',
+        );
+    }
+
     $: {
         if (typeof source === "string") {
-            renderedHtml = marked.parse(source, { async: false }) as string;
+            const parsed = marked.parse(source, { async: false }) as string;
+            renderedHtml = formatChordBadges(parsed);
         } else {
             renderedHtml = "<p>Invalid track data.</p>";
         }
@@ -40,7 +48,7 @@
         padding: 20px;
         font-family: sans-serif;
         font-size: 1rem;
-        line-height: 1.5;
+        line-height: 1.65;
         color: #333;
         background-color: #fff;
         /* Limitar ancho al contenedor padre y evitar desbordes horizontales */
@@ -51,7 +59,20 @@
         overflow-y: auto;
         overflow-x: hidden;
     }
-    
+
+    .lyrics-container :global(.chord-badge) {
+        display: inline-block;
+        background-color: #fff3d1;
+        color: #9c5700;
+        border: 1px solid #f0c36d;
+        border-radius: 4px;
+        padding: 0 6px;
+        margin: 0 2px;
+        font-family: monospace;
+        font-weight: 700;
+        font-size: 0.9em;
+    }
+
     /* Evitar que contenido ancho (imágenes, tablas, bloques de código) genere scroll horizontal */
     .lyrics-container :global(img),
     .lyrics-container :global(table),

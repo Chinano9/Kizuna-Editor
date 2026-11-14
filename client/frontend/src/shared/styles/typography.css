@@ -20,6 +20,29 @@
         url("../../assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
 }
 
+/* Aliases rápidos para que el FontLoadingChecker de AlphaTab resuelva al instante en Linux */
+@font-face {
+    font-family: "Arial";
+    font-style: normal;
+    font-weight: 400;
+    src:
+        local("Arial"),
+        local("Liberation Sans"),
+        local("DejaVu Sans"),
+        url("../../assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+}
+
+@font-face {
+    font-family: "Georgia";
+    font-style: normal;
+    font-weight: 400;
+    src:
+        local("Georgia"),
+        local("Liberation Serif"),
+        local("DejaVu Serif"),
+        url("../../assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+}
+
 /* VT323: Tipografía estilo LCD / terminal retro */
 @font-face {
     font-family: "VT323";

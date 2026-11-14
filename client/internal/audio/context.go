@@ -64,6 +64,7 @@ func GetSharedContext() (*malgo.AllocatedContext, error) {
 
 // TeardownSharedContext cleanly uninitializes and releases the shared malgo context during app shutdown.
 func TeardownSharedContext() {
+	InvalidateDeviceCache()
 	sharedCtxMu.Lock()
 	defer sharedCtxMu.Unlock()
 
@@ -113,6 +114,7 @@ func SetAudioDriver(driverName string) error {
 
 	// 2. Set new driver name
 	currentDriverName = driverName
+	InvalidateDeviceCache()
 
 	// 3. Initialize new context to test validity
 	backend := MapDriverNameToBackend(driverName)
