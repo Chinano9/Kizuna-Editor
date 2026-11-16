@@ -21,8 +21,12 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"kizuna/shared/models"
+	"log"
+	"os"
+	"strings"
 )
 
 // AudioRepository defines persistence operations for recorded AudioVersion takes.
@@ -170,11 +174,31 @@ func (r *SQLiteAudioRepository) GetByTrackID(ctx context.Context, trackID int) (
 	return versions, nil
 }
 
-// Delete removes an audio version record by its ID.
+// Delete removes an audio version record by its ID and deletes its physical .wav file if unreferenced.
 func (r *SQLiteAudioRepository) Delete(ctx context.Context, id int) error {
+	var filePath string
+	_ = r.db.QueryRowContext(ctx, "SELECT file_path FROM audio_versions WHERE id = ?", id).Scan(&filePath)
+	filePath = strings.TrimSpace(filePath)
+
 	_, err := r.db.ExecContext(ctx, "DELETE FROM audio_versions WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("delete audio version %d: %w", id, err)
 	}
+
+	if filePath != "" {
+		var refCount int
+		countQuery := `
+			SELECT
+				(SELECT COUNT(1) FROM audio_versions WHERE file_path = ?) +
+				(SELECT COUNT(1) FROM tracks WHERE data_content = ?)`
+		if scanErr := r.db.QueryRowContext(ctx, countQuery, filePath, models.AudioContentPrefix+filePath).Scan(&refCount); scanErr == nil && refCount == 0 {
+			if rmErr := os.Remove(filePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				return fmt.Errorf("remove audio version file %q: %w", filePath, rmErr)
+			} else if rmErr == nil {
+				log.Printf("[AudioRepository] Deleted physical WAV file: %s", filePath)
+			}
+		}
+	}
+
 	return nil
 }

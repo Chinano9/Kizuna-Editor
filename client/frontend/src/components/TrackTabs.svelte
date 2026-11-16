@@ -29,6 +29,7 @@
         DeleteTrack,
         UpdateTrack,
         GetInstruments,
+        SaveSong,
     } from "../../wailsjs/go/main/App";
 
     let editingIndex: number | null = null;
@@ -50,9 +51,21 @@
 
     function selectTrack(index: number) {
         // Evita cambiar de pista mientras se está editando el nombre de esa misma pista
-
         if (editingIndex !== index) {
             activeTrackIndex.set(index);
+        }
+    }
+
+    async function ensureSongPersisted(): Promise<boolean> {
+        if (!$song) return false;
+        if ($song.id > 0) return true;
+        try {
+            const saved = await SaveSong($song as any);
+            song.set(saved);
+            return saved.id > 0;
+        } catch (err) {
+            console.error("Failed to persist song before track operation:", err);
+            return false;
         }
     }
 
@@ -60,18 +73,22 @@
         if (!$song) return;
 
         try {
-            const trackCount = $song.tracks ? $song.tracks.length : 0;
-            const newTrackName = `Track ${trackCount + 1}`;
-
-            const newTrack = await AddTrack($song.id, newTrackName);
+            const ok = await ensureSongPersisted();
+            if (!ok || !$song) {
+                toastStore.error("Could not save project before adding a track.");
+                return;
+            }
 
             const currentTracks = $song.tracks || [];
-            $song.tracks = [...currentTracks, newTrack];
+            const newTrackName = `Track ${currentTracks.length + 1}`;
 
+            const newTrack = await AddTrack($song.id, newTrackName);
+            const updatedTracks = [...currentTracks, newTrack];
+            $song.tracks = updatedTracks;
             song.set($song);
 
-            activeTrackIndex.set($song.tracks.length - 1);
-            toastStore.success(`Added ${newTrackName}`);
+            activeTrackIndex.set(updatedTracks.length - 1);
+            toastStore.success(`Added "${newTrackName}"`);
         } catch (err) {
             console.error("Failed to add track:", err);
             toastStore.error("Could not add a new track.");
@@ -80,20 +97,20 @@
 
     async function startEditing(index: number, currentName: string) {
         editingIndex = index;
-
         editingName = currentName;
 
         await tick();
 
         inputElement?.focus();
-
         inputElement?.select();
     }
 
     function handleKeydown(event: KeyboardEvent) {
         if (event.key === "Enter") {
+            event.preventDefault();
             saveTrackName();
         } else if (event.key === "Escape") {
+            event.preventDefault();
             cancelEditing();
         }
     }
@@ -101,25 +118,33 @@
     async function saveTrackName() {
         if (editingIndex === null || !$song || !$song.tracks) return;
 
-        const trackToUpdate = $song.tracks[editingIndex];
+        const targetIndex = editingIndex;
+        editingIndex = null;
 
-        if (!trackToUpdate || trackToUpdate.name === editingName) {
-            cancelEditing();
+        const trackToUpdate = $song.tracks[targetIndex];
+        const trimmedName = editingName.trim();
 
+        if (!trackToUpdate || !trimmedName || trackToUpdate.name === trimmedName) {
             return;
         }
 
-        trackToUpdate.name = editingName;
+        const previousName = trackToUpdate.name;
+        trackToUpdate.name = trimmedName;
 
         try {
-            await UpdateTrack(trackToUpdate);
-            song.set($song);
-            toastStore.success(`Renamed track to "${editingName}"`);
+            if (trackToUpdate.id > 0) {
+                await UpdateTrack(trackToUpdate);
+                $song.tracks = [...$song.tracks];
+                song.set($song);
+            } else {
+                const savedSong = await SaveSong($song);
+                song.set(savedSong);
+            }
+            toastStore.success(`Renamed track to "${trimmedName}"`);
         } catch (err) {
+            trackToUpdate.name = previousName;
             console.error("Failed to update track name:", err);
             toastStore.error("Error saving track name.");
-        } finally {
-            cancelEditing();
         }
     }
 
@@ -128,16 +153,26 @@
     }
 
     async function deleteTrack(index: number) {
-        if (!confirm("Are you sure you want to delete this track?")) return;
         if (!$song || !$song.tracks) return;
 
         const trackToDelete = $song.tracks[index];
         if (!trackToDelete) return;
 
+        if (
+            !confirm(
+                `Are you sure you want to delete track "${trackToDelete.name}"? Associated .wav audio files will be permanently removed from disk.`,
+            )
+        ) {
+            return;
+        }
+
         try {
-            await DeleteTrack(trackToDelete.id);
-            $song.tracks.splice(index, 1);
-            activeTrackIndex.clamp($song.tracks.length);
+            if (trackToDelete.id > 0) {
+                await DeleteTrack(trackToDelete.id);
+            }
+            const updatedTracks = $song.tracks.filter((_, idx) => idx !== index);
+            $song.tracks = updatedTracks;
+            activeTrackIndex.clamp(updatedTracks.length);
             song.set($song);
             toastStore.success(`Deleted track "${trackToDelete.name}"`);
         } catch (err) {
@@ -147,9 +182,16 @@
     }
 
     async function handleInstrumentChange(track: Track) {
+        if (!$song || !$song.tracks) return;
         try {
-            await UpdateTrack(track);
-            song.set($song);
+            if (track.id > 0) {
+                await UpdateTrack(track);
+                $song.tracks = [...$song.tracks];
+                song.set($song);
+            } else {
+                const savedSong = await SaveSong($song);
+                song.set(savedSong);
+            }
             toastStore.success("Instrument updated");
         } catch (err) {
             console.error("Failed to update instrument:", err);
@@ -181,11 +223,22 @@
                 {:else}
                     <span
                         class="track-name"
+                        title="Double-click to rename track"
                         on:dblclick|stopPropagation={() =>
                             startEditing(i, track.name)}
                     >
                         {track.name || `Track ${i + 1}`}
                     </span>
+
+                    <button
+                        class="rename-btn"
+                        title="Rename track"
+                        aria-label={`Rename ${track.name || `Track ${i + 1}`}`}
+                        on:click|stopPropagation={() =>
+                            startEditing(i, track.name || `Track ${i + 1}`)}
+                    >
+                        &#9998;
+                    </button>
 
                     <select
                         class="instrument-select"
@@ -202,6 +255,8 @@
 
                     <button
                         class="delete-btn"
+                        title="Delete track"
+                        aria-label={`Delete ${track.name || `Track ${i + 1}`}`}
                         on:click|stopPropagation={() => deleteTrack(i)}
                     >
                         &times;
@@ -351,7 +406,8 @@
         color: var(--lcd-text);
     }
 
-    .delete-btn {
+    .delete-btn,
+    .rename-btn {
         background: none;
 
         border: none;
@@ -359,11 +415,11 @@
         color: var(--lcd-text-muted);
         cursor: pointer;
 
-        font-size: 1.2rem;
+        font-size: 1.1rem;
 
         line-height: 1;
 
-        padding: 0 5px;
+        padding: 0 4px;
 
         border-radius: 50%;
 
@@ -378,12 +434,19 @@
         justify-content: center;
     }
 
+    .rename-btn {
+        font-size: 0.8rem;
+    }
+
     .tab:hover .delete-btn,
-    .tab.active .delete-btn {
+    .tab.active .delete-btn,
+    .tab:hover .rename-btn,
+    .tab.active .rename-btn {
         display: flex; /* Show on hover or when active */
     }
 
-    .delete-btn:hover {
+    .delete-btn:hover,
+    .rename-btn:hover {
         background-color: #2b3739;
         color: var(--lcd-text);
     }
