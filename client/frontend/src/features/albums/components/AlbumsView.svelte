@@ -1,7 +1,7 @@
 
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
-    import { CreateAlbum, DeleteAlbum, GetAlbumSongs, ListAlbums, RemoveSongFromAlbum } from "@wails/go/bindings/AlbumHandler";
+    import { CreateAlbum, DeleteAlbum, GetAlbum, GetAlbumSongs, ListAlbums, RemoveSongFromAlbum, ReorderAlbumSongs, UpdateAlbum } from "@wails/go/bindings/AlbumHandler";
     import type { models } from "@wails/go/models";
     import type { AlbumData } from "../stores/albumStore";
     import { songId, song } from "@/stores/projectStore";
@@ -26,6 +26,57 @@
     let removingSongId: number | null = null;
     let albumToDelete: AlbumData | null = null;
     let isDeletingAlbum = false;
+
+    let albumToRename: AlbumData | null = null;
+    let newTitle = "";
+    let isRenaming = false;
+    let isReordering = false;
+    let busy = false;
+    $: busy = isDeletingAlbum || removingSongId !== null || isRenaming || isReordering;
+
+    function requestRename() {
+        if (!selectedAlbum || busy) return;
+        albumToRename = selectedAlbum;
+        newTitle = selectedAlbum.title;
+    }
+
+    async function renameAlbum() {
+        if (!albumToRename || busy) return;
+        const name = newTitle.trim();
+        if (!name) { toastStore.warning("El nombre del álbum es obligatorio."); return; }
+        const id = albumToRename.id;
+        isRenaming = true;
+        try {
+            const original = await GetAlbum(id);
+            original.title = name;
+            await UpdateAlbum(original);
+            albumStore.setAlbums($albumStore.map(item => item.id === id ? { ...item, title: name } : item));
+            if (selectedAlbum?.id === id) selectedAlbum = { ...selectedAlbum, title: name };
+            albumToRename = null;
+            toastStore.success("Álbum renombrado correctamente.");
+        } catch (error) {
+            console.error("[AlbumsView] Rename failed:", error);
+            toastStore.error("No se pudo renombrar el álbum.");
+        } finally { isRenaming = false; }
+    }
+
+    async function moveSong(index: number, direction: number) {
+        if (!selectedAlbum || busy || isLoadingSongs) return;
+        const target = index + direction;
+        if (target < 0 || target >= albumSongs.length) return;
+        const album = selectedAlbum;
+        const next = [...albumSongs];
+        [next[index], next[target]] = [next[target], next[index]];
+        isReordering = true;
+        try {
+            await ReorderAlbumSongs(album.id, next.map(item => item.id));
+            if (selectedAlbum?.id === album.id) albumSongs = next;
+        } catch (error) {
+            console.error("[AlbumsView] Reorder failed:", error);
+            toastStore.error("No se pudo guardar el orden. Se recargará el álbum.");
+            if (selectedAlbum?.id === album.id) await openAlbum(album);
+        } finally { isReordering = false; }
+    }
 
     onMount(() => {
         void loadAlbums();
@@ -190,15 +241,19 @@
 <section class="albums-view">
     {#if selectedAlbum}
         <header class="albums-header album-detail-header">
-            <div>
-                <button type="button" class="back-button" on:click={backToAlbums} disabled={isDeletingAlbum}>← Volver a álbumes</button>
+            <div class="album-header-copy">
+                <button type="button" class="back-button" on:click={backToAlbums} disabled={busy}>← Volver a álbumes</button>
                 <h1>{selectedAlbum.title}</h1>
                 <p>{selectedAlbum.artist || "Artista sin definir"}</p>
                 {#if selectedAlbum.description}
                     <p class="album-description">{selectedAlbum.description}</p>
                 {/if}
             </div>
-            <button type="button" class="danger-button" disabled={isDeletingAlbum || removingSongId !== null} on:click={() => selectedAlbum && requestDeleteAlbum(selectedAlbum)}>Eliminar álbum</button>
+
+            <div class="album-actions">
+                <button type="button" class="secondary-button action-header-button" disabled={busy} on:click={requestRename}>Renombrar álbum</button>
+                <button type="button" class="danger-button action-header-button" disabled={busy} on:click={() => selectedAlbum && requestDeleteAlbum(selectedAlbum)}>Eliminar álbum</button>
+            </div>
         </header>
 
         {#if isLoadingSongs}
@@ -218,9 +273,10 @@
         {:else}
             <p class="song-count">{albumSongs.length} {albumSongs.length === 1 ? "canción" : "canciones"}</p>
             <div class="song-grid">
-                {#each albumSongs as albumSong (albumSong.id)}
+                {#each albumSongs as albumSong, index (albumSong.id)}
                     <div class="song-row">
-                        <button type="button" class="song-card" disabled={removingSongId !== null || isDeletingAlbum} on:click={() => openSong(albumSong)}>
+                        <button type="button" class="song-card" disabled={busy} on:click={() => openSong(albumSong)}>
+                            <span class="song-position">{index + 1}.</span>
                             <span class="song-icon" aria-hidden="true">🎵</span>
                             <span class="song-info">
                                 <strong>{albumSong.title}</strong>
@@ -228,9 +284,17 @@
                             </span>
                             <span class="song-arrow" aria-hidden="true">›</span>
                         </button>
-                        <button type="button" class="unlink-button" disabled={removingSongId !== null || isDeletingAlbum} aria-label={`Desvincular ${albumSong.title} del álbum`} on:click={() => unlinkSong(albumSong)}>
-                            {removingSongId === albumSong.id ? "Desvinculando..." : "Desvincular"}
-                        </button>
+
+                        <div class="song-actions">
+                            <div class="order-controls">
+                                <button type="button" class="icon-button" disabled={busy || index === 0} aria-label={`Subir ${albumSong.title}`} title="Subir" on:click={() => moveSong(index, -1)}>↑</button>
+                                <button type="button" class="icon-button" disabled={busy || index === albumSongs.length - 1} aria-label={`Bajar ${albumSong.title}`} title="Bajar" on:click={() => moveSong(index, 1)}>↓</button>
+                            </div>
+                            
+                            <button type="button" class="unlink-button" disabled={busy} aria-label={`Desvincular ${albumSong.title} del álbum`} on:click={() => unlinkSong(albumSong)}>
+                                {removingSongId === albumSong.id ? "Desvinculando..." : "Desvincular"}
+                            </button>
+                        </div>
                     </div>
                 {/each}
             </div>
@@ -288,6 +352,22 @@
                 <div class="modal-actions">
                     <button type="button" class="secondary-button" disabled={isSaving} on:click={closeModal}>Cancelar</button>
                     <button type="submit" class="primary-button" disabled={isSaving}>{isSaving ? "Guardando..." : "Crear álbum"}</button>
+                </div>
+            </form>
+        </div>
+    </div>
+{/if}
+
+{#if albumToRename}
+    <div class="modal-overlay" role="presentation">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="rename-album-title">
+            <h2 id="rename-album-title">Renombrar álbum</h2>
+            <form on:submit|preventDefault={renameAlbum}>
+                <label for="new-album-title">Nuevo nombre *</label>
+                <input id="new-album-title" bind:value={newTitle} maxlength="150" required disabled={isRenaming}/>
+                <div class="modal-actions">
+                    <button type="button" class="secondary-button" disabled={isRenaming} on:click={() => albumToRename = null}>Cancelar</button>
+                    <button type="submit" class="primary-button" disabled={isRenaming}>{isRenaming ? "Guardando..." : "Guardar nombre"}</button>
                 </div>
             </form>
         </div>
@@ -458,7 +538,7 @@
 
     .song-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(255px, 1fr));
+        grid-template-columns: minmax(0, 1fr);
         gap: 14px;
     }
 
@@ -587,7 +667,31 @@
         margin-top: 12px;
     }
 
-    .album-detail-header { align-items: flex-start; }
+    .album-detail-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: start;
+        gap: 24px;
+    }
+
+    .album-header-copy {
+        min-width: 0;
+    }
+
+    .album-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: nowrap;
+        align-self: start;
+    }
+
+    .action-header-button {
+        min-width: 150px;
+        justify-content: center;
+        white-space: nowrap;
+    }
+
     .danger-button {
         padding: 11px 16px;
         border: 1px solid #b65d5d;
@@ -599,31 +703,159 @@
         cursor: pointer;
         white-space: nowrap;
     }
-    .danger-button:hover:not(:disabled) { background: #773333; }
-    .danger-button:disabled, .unlink-button:disabled, .song-card:disabled {
+
+    .danger-button:hover:not(:disabled) {
+        background: #773333;
+    }
+
+    .danger-button:disabled, .unlink-button:disabled, .song-card:disabled, .icon-button:disabled {
         opacity: 0.6;
         cursor: not-allowed;
     }
-    .song-row { display: flex; align-items: stretch; gap: 8px; min-width: 0; }
-    .song-row .song-card { flex: 1; width: auto; }
+
+    .song-position {
+        color: #a0ada5;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .song-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+    }
+
+    .song-row .song-card {
+        flex: 1;
+        width: auto;
+    }
+
+    .song-actions {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        flex-wrap: nowrap;
+    }
+
+    .order-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .icon-button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        box-sizing: border-box;
+        flex-shrink: 0;
+        padding: 0;
+        border: 1px solid #526157;
+        border-radius: 8px;
+        background: #353b38;
+        color: #ffffff;
+        font: inherit;
+        font-size: 1.2rem;
+        font-weight: 700;
+        cursor: pointer;
+    }
+
+    .icon-button:hover:not(:disabled) {
+        background: #465049;
+    }
+
     .unlink-button {
-        padding: 8px 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 44px;
+        width: 130px;
+        box-sizing: border-box;
+        flex-shrink: 0;
+        padding: 0 14px;
         border: 1px solid #725b4a;
-        border-radius: 7px;
+        border-radius: 8px;
         background: #35291f;
         color: #ffdbba;
         font: inherit;
-        font-size: 0.8rem;
+        font-size: 0.82rem;
+        font-weight: 600;
         cursor: pointer;
+        white-space: nowrap;
     }
-    .unlink-button:hover:not(:disabled) { background: #483426; }
-    .unlink-button:focus-visible, .danger-button:focus-visible {
+
+    .unlink-button:hover:not(:disabled) {
+        background: #483426;
+    }
+
+    .unlink-button:focus-visible, .danger-button:focus-visible, .icon-button:focus-visible {
         outline: 2px solid #b8ec9a;
         outline-offset: 2px;
     }
-    @media (max-width: 600px) {
-        .album-detail-header { flex-wrap: wrap; }
-        .song-row { flex-direction: column; }
-        .unlink-button { align-self: flex-end; }
+
+
+    @media (max-width: 980px) {
+                .song-row {
+            grid-template-columns: minmax(0, 1fr) 170px;
+            align-items: stretch;
+        }
+
+        .song-actions {
+            flex-direction: column;
+            justify-content: center;
+            min-width: 0;
+            gap: 8px;
+        }
+
+        .order-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            width: 100%;
+        }
+
+        .icon-button {
+            width: 100%;
+        }
+
+        .unlink-button {
+            width: 100%;
+        }
+        .album-detail-header {
+            grid-template-columns: 1fr;
+        }
+
+        .album-actions {
+            justify-content: flex-start;
+        }
+    }
+
+    @media (max-width: 690px) {
+        .song-row {
+            grid-template-columns: 1fr;
+        }
+
+        .song-actions {
+            flex-direction: row;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .order-controls {
+            display: flex;
+            width: auto;
+        }
+
+        .icon-button {
+            width: 44px;
+        }
+
+        .unlink-button {
+            width: 130px;
+        }
     }
 </style>

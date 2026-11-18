@@ -107,3 +107,8 @@ func (s *AlbumService) RemoveSongFromAlbum(ctx context.Context, songID int) erro
 func (s *AlbumService) GetAlbumSongs(ctx context.Context, albumID int) ([]models.Song, error) {
 	return s.songRepo.GetByAlbumID(ctx, albumID)
 }
+
+// ReorderAlbumSongs persists a complete custom track order (Issue #18).
+func (s *AlbumService) ReorderAlbumSongs(ctx context.Context, albumID int, songIDs []int) error {
+	return s.songRepo.ReorderAlbumSongs(ctx, albumID, songIDs)
+}
