@@ -8,7 +8,7 @@
     import Workbar from "@/components/Workbar.svelte";
     import AlbumSelector from "@/features/albums/components/AlbumSelector.svelte";
 
-    import { songId, song, activeSongStore } from "@/stores/projectStore";
+    import { songId, song, activeSongStore, autoSaveStore } from "@/stores/projectStore";
     import { currentView } from "@/stores/viewStore";
     import { activeTrackIndex } from "@/stores/trackStore";
     import { audioPlayerStore } from "@/features/audio-deck/stores/audioPlayerStore";
@@ -65,12 +65,14 @@
         audioPlayerStore.requestTogglePlay();
     }
 
-    function goBack() {
+    async function goBack() {
+        await autoSaveStore.flushIfPending();
         audioPlayerStore.reset();
         currentView.set("dashboard");
     }
 
     onDestroy(() => {
+        void autoSaveStore.flushIfPending();
         audioPlayerStore.reset();
     });
 </script>

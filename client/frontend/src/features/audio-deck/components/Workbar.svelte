@@ -23,7 +23,10 @@
     } from "@wails/go/main/App";
     import type { Track, AudioVersion, AudioDevice } from "@shared/types/wails";
     import { formatTime } from "@shared/lib/formatters";
+    import { looksLikeAlphaTex, parsePlayableNotesFromAlphaTex } from "@shared/lib/musicUtils";
+    import { toastStore } from "@shared/stores/toastStore";
     import { song } from "@/stores/projectStore";
+    import { audioPlayerStore } from "../stores/audioPlayerStore";
 
     import HardwareDeck from "./HardwareDeck.svelte";
     import SessionTimeDisplay from "./SessionTimeDisplay.svelte";

@@ -148,6 +148,9 @@ func (r *SQLiteTrackRepository) Update(ctx context.Context, tx *sql.Tx, track *m
 		_, err = tx.ExecContext(ctx, query, track.Name, track.DataContent, track.InstrumentID, track.DisplayMode, track.IsMuted, track.ID)
 	} else {
 		_, err = r.db.ExecContext(ctx, query, track.Name, track.DataContent, track.InstrumentID, track.DisplayMode, track.IsMuted, track.ID)
+		if err == nil && track.SongID > 0 {
+			_, _ = r.db.ExecContext(ctx, "UPDATE songs SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", track.SongID)
+		}
 	}
 
 	if err != nil {

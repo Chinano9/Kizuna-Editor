@@ -21,7 +21,7 @@
     import { get } from "svelte/store";
     import { onMount } from "svelte";
     import { SaveSong, GetAudioVersionsForSong } from "../../wailsjs/go/main/App";
-    import { song, autoBar } from "../stores/projectStore";
+    import { song, autoBar, autoSaveStore } from "../stores/projectStore";
     import { syncStore } from "@/features/cloud-sync/stores/syncStore";
     import AuthModal from "@/features/cloud-sync/components/AuthModal.svelte";
     import { toastStore } from "@shared/stores/toastStore";
@@ -40,6 +40,10 @@
         };
     });
 
+    function handleTitleInput() {
+        autoSaveStore.scheduleSave();
+    }
+
     async function save() {
         const currentSong = get(song);
 
@@ -49,10 +53,11 @@
         }
 
         try {
-            console.log("Saving song object:", currentSong);
-            const updatedSong = await SaveSong(currentSong);
-            song.set(updatedSong);
-            toastStore.success(`Project saved successfully (ID: ${updatedSong.id})`);
+            const updatedSong = await autoSaveStore.flush();
+            if (updatedSong) {
+                song.set(updatedSong);
+                toastStore.success(`Project saved successfully (ID: ${updatedSong.id})`);
+            }
         } catch (err) {
             console.error("Failed to save project:", err);
             toastStore.error("Failed to save project.");
@@ -74,16 +79,15 @@
             return;
         }
 
-        // Auto-save local changes if unsaved or ID is 0
-        if (currentSong.id === 0) {
-            try {
-                const saved = await SaveSong(currentSong);
-                song.set(saved);
-                currentSong = saved;
-            } catch (err) {
-                toastStore.error("Debes guardar la canción localmente antes de respaldar.");
-                return;
+        // Flush any pending local autosave or initial save (ID === 0) before cloud push
+        try {
+            const flushed = await autoSaveStore.flush();
+            if (flushed) {
+                currentSong = flushed;
             }
+        } catch (err) {
+            toastStore.error("Debes guardar la canción localmente antes de respaldar.");
+            return;
         }
 
         // Gather all takes/audio versions associated with this project
@@ -110,6 +114,7 @@
             type="text"
             class="title-input"
             bind:value={$song.title}
+            on:input={handleTitleInput}
             placeholder="Song Title..."
         />
     {/if}
