@@ -240,6 +240,9 @@ func getAudioBaseDir() (string, error) {
 		if xdg != "" {
 			return xdg, nil
 		}
+		if appdata := os.Getenv("APPDATA"); appdata != "" {
+			return appdata, nil
+		}
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err

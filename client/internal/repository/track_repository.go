@@ -21,8 +21,11 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"kizuna/shared/models"
+	"log"
+	"os"
 	"strings"
 )
 
@@ -153,21 +156,32 @@ func (r *SQLiteTrackRepository) Update(ctx context.Context, tx *sql.Tx, track *m
 	return nil
 }
 
-// Delete removes a track by its ID.
+// Delete removes a track by its ID and deletes any associated physical .wav files on disk.
 func (r *SQLiteTrackRepository) Delete(ctx context.Context, id int) error {
-	_, err := r.db.ExecContext(ctx, "DELETE FROM tracks WHERE id = ?", id)
+	audioPaths, err := r.collectTrackAudioFiles(ctx, nil, []int{id})
+	if err != nil {
+		return fmt.Errorf("collect audio files for track %d: %w", id, err)
+	}
+
+	_, err = r.db.ExecContext(ctx, "DELETE FROM tracks WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("delete track %d: %w", id, err)
+	}
+
+	if err := r.removeUnreferencedAudioFiles(ctx, nil, audioPaths); err != nil {
+		return err
 	}
 	return nil
 }
 
-// DeleteBySongIDExcept deletes tracks for a song whose IDs are not in keepIDs.
+// DeleteBySongIDExcept deletes tracks for a song whose IDs are not in keepIDs and removes their physical .wav files.
 func (r *SQLiteTrackRepository) DeleteBySongIDExcept(ctx context.Context, tx *sql.Tx, songID int, keepIDs []int) error {
+	var selectIDsQuery string
 	var query string
 	var args []interface{}
 
 	if len(keepIDs) == 0 {
+		selectIDsQuery = "SELECT id FROM tracks WHERE song_id = ?"
 		query = "DELETE FROM tracks WHERE song_id = ?"
 		args = append(args, songID)
 	} else {
@@ -176,11 +190,36 @@ func (r *SQLiteTrackRepository) DeleteBySongIDExcept(ctx context.Context, tx *sq
 			placeholders[i] = "?"
 			args = append(args, id)
 		}
-		query = fmt.Sprintf("DELETE FROM tracks WHERE song_id = ? AND id NOT IN (%s)", strings.Join(placeholders, ","))
+		inClause := strings.Join(placeholders, ",")
+		selectIDsQuery = fmt.Sprintf("SELECT id FROM tracks WHERE song_id = ? AND id NOT IN (%s)", inClause)
+		query = fmt.Sprintf("DELETE FROM tracks WHERE song_id = ? AND id NOT IN (%s)", inClause)
 		args = append([]interface{}{songID}, args...)
 	}
 
+	var rows *sql.Rows
 	var err error
+	if tx != nil {
+		rows, err = tx.QueryContext(ctx, selectIDsQuery, args...)
+	} else {
+		rows, err = r.db.QueryContext(ctx, selectIDsQuery, args...)
+	}
+	if err != nil {
+		return fmt.Errorf("query tracks to delete for song %d: %w", songID, err)
+	}
+	var trackIDsToDelete []int
+	for rows.Next() {
+		var tid int
+		if scanErr := rows.Scan(&tid); scanErr == nil {
+			trackIDsToDelete = append(trackIDsToDelete, tid)
+		}
+	}
+	_ = rows.Close()
+
+	audioPaths, err := r.collectTrackAudioFiles(ctx, tx, trackIDsToDelete)
+	if err != nil {
+		return fmt.Errorf("collect audio files for deleted tracks in song %d: %w", songID, err)
+	}
+
 	if tx != nil {
 		_, err = tx.ExecContext(ctx, query, args...)
 	} else {
@@ -189,6 +228,108 @@ func (r *SQLiteTrackRepository) DeleteBySongIDExcept(ctx context.Context, tx *sq
 
 	if err != nil {
 		return fmt.Errorf("delete tracks except keepIDs for song %d: %w", songID, err)
+	}
+
+	if err := r.removeUnreferencedAudioFiles(ctx, tx, audioPaths); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *SQLiteTrackRepository) collectTrackAudioFiles(ctx context.Context, tx *sql.Tx, trackIDs []int) ([]string, error) {
+	if len(trackIDs) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(trackIDs))
+	args := make([]interface{}, len(trackIDs))
+	for i, id := range trackIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	inClause := strings.Join(placeholders, ",")
+
+	seen := make(map[string]struct{})
+	var paths []string
+	addPath := func(raw string) {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			return
+		}
+		if _, exists := seen[trimmed]; !exists {
+			seen[trimmed] = struct{}{}
+			paths = append(paths, trimmed)
+		}
+	}
+
+	// 1. Check tracks.data_content for "audio:<filePath>"
+	trackQuery := fmt.Sprintf("SELECT data_content FROM tracks WHERE id IN (%s)", inClause)
+	var trackRows *sql.Rows
+	var err error
+	if tx != nil {
+		trackRows, err = tx.QueryContext(ctx, trackQuery, args...)
+	} else {
+		trackRows, err = r.db.QueryContext(ctx, trackQuery, args...)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query track data_content for audio cleanup: %w", err)
+	}
+	for trackRows.Next() {
+		var content string
+		if scanErr := trackRows.Scan(&content); scanErr == nil {
+			if strings.HasPrefix(content, models.AudioContentPrefix) {
+				addPath(strings.TrimPrefix(content, models.AudioContentPrefix))
+			}
+		}
+	}
+	_ = trackRows.Close()
+
+	// 2. Check audio_versions.file_path for track_id IN (...)
+	avQuery := fmt.Sprintf("SELECT file_path FROM audio_versions WHERE track_id IN (%s)", inClause)
+	var avRows *sql.Rows
+	if tx != nil {
+		avRows, err = tx.QueryContext(ctx, avQuery, args...)
+	} else {
+		avRows, err = r.db.QueryContext(ctx, avQuery, args...)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query audio_versions for track cleanup: %w", err)
+	}
+	for avRows.Next() {
+		var filePath string
+		if scanErr := avRows.Scan(&filePath); scanErr == nil {
+			addPath(filePath)
+		}
+	}
+	_ = avRows.Close()
+
+	return paths, nil
+}
+
+func (r *SQLiteTrackRepository) removeUnreferencedAudioFiles(ctx context.Context, tx *sql.Tx, paths []string) error {
+	for _, path := range paths {
+		var refCount int
+		countQuery := `
+			SELECT
+				(SELECT COUNT(1) FROM audio_versions WHERE file_path = ?) +
+				(SELECT COUNT(1) FROM tracks WHERE data_content = ?)`
+		audioContent := models.AudioContentPrefix + path
+
+		var err error
+		if tx != nil {
+			err = tx.QueryRowContext(ctx, countQuery, path, audioContent).Scan(&refCount)
+		} else {
+			err = r.db.QueryRowContext(ctx, countQuery, path, audioContent).Scan(&refCount)
+		}
+		if err == nil && refCount > 0 {
+			continue
+		}
+
+		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			return fmt.Errorf("remove track audio file %q: %w", path, rmErr)
+		} else if rmErr == nil {
+			log.Printf("[TrackRepository] Deleted physical WAV file: %s", path)
+		}
 	}
 	return nil
 }

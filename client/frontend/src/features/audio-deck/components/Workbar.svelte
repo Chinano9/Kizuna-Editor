@@ -10,6 +10,7 @@
         GetInputDevices,
         PlayAudio,
         PauseAudio,
+        StopAudio,
         SeekAudio,
         SetAudioVolume,
         GetPlaybackPosition,
@@ -22,13 +23,7 @@
     } from "@wails/go/main/App";
     import type { Track, AudioVersion, AudioDevice } from "@shared/types/wails";
     import { formatTime } from "@shared/lib/formatters";
-    import {
-        looksLikeAlphaTex,
-        parsePlayableNotesFromAlphaTex,
-        extractScoreMetadata,
-    } from "@shared/lib/musicUtils";
     import { song } from "@/stores/projectStore";
-    import { audioPlayerStore } from "../stores/audioPlayerStore";
 
     import HardwareDeck from "./HardwareDeck.svelte";
     import SessionTimeDisplay from "./SessionTimeDisplay.svelte";
@@ -69,6 +64,22 @@
             lastActiveTrackID = activeTrack.id;
             selectedTargetTrackID = activeTrack.id;
         }
+    }
+
+    let lastTrackSignature = "";
+    $: {
+        const currentTracks = $song?.tracks || [];
+        const sig = `${songID}:${currentTracks.map((t) => t.id).join(",")}`;
+        if (
+            selectedTargetTrackID > 0 &&
+            !currentTracks.some((t) => t.id === selectedTargetTrackID)
+        ) {
+            selectedTargetTrackID = activeTrack?.id || 0;
+        }
+        if (lastTrackSignature && sig !== lastTrackSignature) {
+            loadTakes();
+        }
+        lastTrackSignature = sig;
     }
 
     let isSeeking = false;
@@ -278,10 +289,26 @@
             if (takes.length > 0) {
                 const exists = takes.some((t) => t.file_path === selectedTakePath);
                 if (!exists) {
+                    if (isPlaying) {
+                        try {
+                            await StopAudio();
+                        } catch {
+                            // Ignore stop errors if no stream is active
+                        }
+                        stopPlayback();
+                    }
                     selectedTakePath = takes[0].file_path;
                 }
                 audioPlayerStore.setActiveTake(selectedTakePath);
             } else {
+                if (isPlaying) {
+                    try {
+                        await StopAudio();
+                    } catch {
+                        // Ignore stop errors if no stream is active
+                    }
+                    stopPlayback();
+                }
                 selectedTakePath = "";
                 audioPlayerStore.setActiveTake("");
             }

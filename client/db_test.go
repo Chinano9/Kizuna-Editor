@@ -4,6 +4,8 @@ import (
 	"kizuna/client/internal/database"
 	"kizuna/client/internal/database/migrator"
 	"kizuna/shared/models"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -103,8 +105,13 @@ func TestDBManager_TracksCRUDAndCascade(t *testing.T) {
 		t.Fatalf("failed to update track: %v", err)
 	}
 
-	// 4. Add audio version linked to track
-	av, err := mgr.AddAudioVersion(savedSong.ID, &track.ID, "Take 1", "/path/to/take1.wav", "Clean mic")
+	// 4. Add audio version linked to track with a real .wav file on disk
+	tmpWav := filepath.Join(t.TempDir(), "take1.wav")
+	if err := os.WriteFile(tmpWav, []byte("RIFF....WAVEfmt "), 0o644); err != nil {
+		t.Fatalf("failed to create temp wav file: %v", err)
+	}
+
+	av, err := mgr.AddAudioVersion(savedSong.ID, &track.ID, "Take 1", tmpWav, "Clean mic")
 	if err != nil {
 		t.Fatalf("failed to add audio version: %v", err)
 	}
@@ -112,7 +119,7 @@ func TestDBManager_TracksCRUDAndCascade(t *testing.T) {
 		t.Fatalf("expected audio version to have positive ID")
 	}
 
-	// 5. Test CASCADE delete: deleting track should cascade delete its audio_version
+	// 5. Test CASCADE delete & physical .wav removal: deleting track should cascade delete its audio_version and remove the .wav file from disk
 	if err := mgr.DeleteTrack(track.ID); err != nil {
 		t.Fatalf("failed to delete track: %v", err)
 	}
@@ -123,6 +130,9 @@ func TestDBManager_TracksCRUDAndCascade(t *testing.T) {
 	}
 	if len(versions) != 0 {
 		t.Errorf("expected 0 audio versions after cascade delete, got %d", len(versions))
+	}
+	if _, err := os.Stat(tmpWav); !os.IsNotExist(err) {
+		t.Errorf("expected physical wav file %s to be deleted from disk when track is deleted, got err=%v", tmpWav, err)
 	}
 }
 
