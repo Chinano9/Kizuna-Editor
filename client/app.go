@@ -97,6 +97,16 @@ func (a *App) PullAndImportProject(cloudURL string, token string, projectID int)
 	return a.syncHandler.PullAndImportProject(cloudURL, token, projectID)
 }
 
+// ListCloudProjects fetches and locally decrypts the user's cloud projects.
+func (a *App) ListCloudProjects(cloudURL string, token string) ([]models.CloudProject, error) {
+	return a.syncHandler.ListCloudProjects(cloudURL, token)
+}
+
+// GetEncryptionKeyFingerprint returns the short SHA-256 fingerprint of the local E2EE key.
+func (a *App) GetEncryptionKeyFingerprint() string {
+	return a.syncHandler.GetEncryptionKeyFingerprint()
+}
+
 // --- Song Operations (Delegated to SongHandler) ---
 
 // SaveQuickIdea persists the current editor content to the local database.
