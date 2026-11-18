@@ -13,6 +13,9 @@ export interface CloudPushPayload {
     base_version: number;
     tracks: Track[];
     audio_versions: AudioVersion[];
+    encrypted_payload?: string;
+    encryption_algo?: string;
+    is_encrypted?: boolean;
 }
 
 export interface CloudPushResult {
@@ -32,6 +35,9 @@ export interface CloudProject {
     version: number;
     tracks?: Track[];
     audio_versions?: AudioVersion[];
+    encrypted_payload?: string;
+    encryption_algo?: string;
+    is_encrypted?: boolean;
     created_at?: string;
     updated_at?: string;
 }

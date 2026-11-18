@@ -35,29 +35,35 @@ var (
 
 // CloudProject represents a remote project stored in Kizuna Cloud (Issues #13, #14).
 type CloudProject struct {
-	ID            int                   `json:"id"`
-	OwnerID       string                `json:"owner_id"`
-	Title         string                `json:"title"`
-	BPM           int                   `json:"bpm"`
-	TimeSignature string                `json:"time_signature"`
-	KeySignature  string                `json:"key_signature"`
-	Version       int                   `json:"version"`
-	Tracks        []models.Track        `json:"tracks"`
-	AudioVersions []models.AudioVersion `json:"audio_versions"`
-	CreatedAt     time.Time             `json:"created_at"`
-	UpdatedAt     time.Time             `json:"updated_at"`
+	ID               int                   `json:"id"`
+	OwnerID          string                `json:"owner_id"`
+	Title            string                `json:"title"`
+	BPM              int                   `json:"bpm"`
+	TimeSignature    string                `json:"time_signature"`
+	KeySignature     string                `json:"key_signature"`
+	Version          int                   `json:"version"`
+	Tracks           []models.Track        `json:"tracks"`
+	AudioVersions    []models.AudioVersion `json:"audio_versions"`
+	EncryptedPayload string                `json:"encrypted_payload,omitempty"`
+	EncryptionAlgo   string                `json:"encryption_algo,omitempty"`
+	IsEncrypted      bool                  `json:"is_encrypted,omitempty"`
+	CreatedAt        time.Time             `json:"created_at"`
+	UpdatedAt        time.Time             `json:"updated_at"`
 }
 
 // PushRequest represents a sync push from desktop to cloud (Issue #13).
 type PushRequest struct {
-	ProjectID     int                   `json:"project_id"`
-	Title         string                `json:"title"`
-	BPM           int                   `json:"bpm"`
-	TimeSignature string                `json:"time_signature"`
-	KeySignature  string                `json:"key_signature"`
-	BaseVersion   int                   `json:"base_version"` // 0 for initial upload
-	Tracks        []models.Track        `json:"tracks"`
-	AudioVersions []models.AudioVersion `json:"audio_versions"`
+	ProjectID        int                   `json:"project_id"`
+	Title            string                `json:"title"`
+	BPM              int                   `json:"bpm"`
+	TimeSignature    string                `json:"time_signature"`
+	KeySignature     string                `json:"key_signature"`
+	BaseVersion      int                   `json:"base_version"` // 0 for initial upload
+	Tracks           []models.Track        `json:"tracks"`
+	AudioVersions    []models.AudioVersion `json:"audio_versions"`
+	EncryptedPayload string                `json:"encrypted_payload,omitempty"`
+	EncryptionAlgo   string                `json:"encryption_algo,omitempty"`
+	IsEncrypted      bool                  `json:"is_encrypted,omitempty"`
 }
 
 // PushResponse returns the newly assigned cloud version and sync timestamp.
@@ -108,17 +114,20 @@ func (e *Engine) Push(userID string, req PushRequest) (*PushResponse, error) {
 		e.nextID++
 
 		project := &CloudProject{
-			ID:            newID,
-			OwnerID:       userID,
-			Title:         req.Title,
-			BPM:           req.BPM,
-			TimeSignature: req.TimeSignature,
-			KeySignature:  req.KeySignature,
-			Version:       1,
-			Tracks:        req.Tracks,
-			AudioVersions: req.AudioVersions,
-			CreatedAt:     now,
-			UpdatedAt:     now,
+			ID:               newID,
+			OwnerID:          userID,
+			Title:            req.Title,
+			BPM:              req.BPM,
+			TimeSignature:    req.TimeSignature,
+			KeySignature:     req.KeySignature,
+			Version:          1,
+			Tracks:           req.Tracks,
+			AudioVersions:    req.AudioVersions,
+			EncryptedPayload: req.EncryptedPayload,
+			EncryptionAlgo:   req.EncryptionAlgo,
+			IsEncrypted:      req.IsEncrypted,
+			CreatedAt:        now,
+			UpdatedAt:        now,
 		}
 
 		e.projects[newID] = project
@@ -157,6 +166,9 @@ func (e *Engine) Push(userID string, req PushRequest) (*PushResponse, error) {
 	project.KeySignature = req.KeySignature
 	project.Tracks = req.Tracks
 	project.AudioVersions = req.AudioVersions
+	project.EncryptedPayload = req.EncryptedPayload
+	project.EncryptionAlgo = req.EncryptionAlgo
+	project.IsEncrypted = req.IsEncrypted
 	project.Version++
 	project.UpdatedAt = now
 

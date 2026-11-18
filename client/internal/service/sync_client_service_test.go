@@ -19,15 +19,21 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package service
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
+	"kizuna/client/internal/crypto"
 	"kizuna/client/internal/database"
 	"kizuna/client/internal/database/migrator"
 	"kizuna/client/internal/repository"
 	"kizuna/shared/models"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -355,9 +361,209 @@ func TestSyncClientService_PullProjectFromCloud(t *testing.T) {
 			t.Fatalf("expected valid imported song ID, got %d", songID)
 		}
 
-		importedSong, err := songRepo.GetByID(ctx, songID)
-		if err != nil || importedSong.Title != "Highway Star Remaster" {
+		if importedSong, err := songRepo.GetByID(ctx, songID); err != nil || importedSong.Title != "Highway Star Remaster" {
 			t.Fatalf("failed to query imported song: %v", err)
 		}
 	})
+}
+
+func TestSyncClientService_ZeroKnowledgeE2EE_PushAndPullWithAudio(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+
+	db := setupSyncTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+
+	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+	localKey := svc.GetEncryptionKey()
+	if len(localKey) != crypto.KeySize {
+		t.Fatalf("expected %d-byte local key, got %d", crypto.KeySize, len(localKey))
+	}
+
+	// 1. Create a local song with tracks and a physical .wav file on disk
+	song := &models.Song{
+		Title:         "Zero Knowledge Symphony",
+		BPM:           128,
+		TimeSignature: "4/4",
+		KeySignature:  "E minor",
+	}
+	songID, err := songRepo.Create(ctx, nil, song)
+	if err != nil {
+		t.Fatalf("failed to create song: %v", err)
+	}
+
+	_, err = trackRepo.Create(ctx, nil, &models.Track{
+		SongID:       songID,
+		InstrumentID: 1,
+		Name:         "Guitarra Principal",
+		DataContent:  `\tempo 128 (0.1 2.2).4 (3.1 5.2).4 |`,
+		DisplayMode:  models.DisplayModeBoth,
+	})
+	if err != nil {
+		t.Fatalf("failed to create track: %v", err)
+	}
+
+	wavContent := []byte("RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x11\x22\x33\x44")
+	originalWavPath := filepath.Join(t.TempDir(), "solo_take.wav")
+	if err := os.WriteFile(originalWavPath, wavContent, 0o644); err != nil {
+		t.Fatalf("failed to write test wav: %v", err)
+	}
+
+	_, err = audioRepo.Create(ctx, &models.AudioVersion{
+		SongID:      songID,
+		VersionName: "Solo Take 1",
+		FilePath:    originalWavPath,
+		Notes:       "Recorded with condenser mic",
+	})
+	if err != nil {
+		t.Fatalf("failed to create audio version: %v", err)
+	}
+
+	// 2. Mock Zero-Knowledge Cloud Server that stores whateverPushRequest it receives
+	var storedOnServer models.CloudProject
+	var rawPushWireBytes []byte
+
+	mockCloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sync/push":
+			rawBody, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			rawPushWireBytes = rawBody
+
+			var req models.CloudPushPayload
+			if err := json.Unmarshal(rawBody, &req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			storedOnServer = models.CloudProject{
+				ID:               2025,
+				OwnerID:          "usr_zk",
+				Title:            req.Title,
+				BPM:              req.BPM,
+				TimeSignature:    req.TimeSignature,
+				KeySignature:     req.KeySignature,
+				Version:          1,
+				Tracks:           req.Tracks,
+				AudioVersions:    req.AudioVersions,
+				EncryptedPayload: req.EncryptedPayload,
+				EncryptionAlgo:   req.EncryptionAlgo,
+				IsEncrypted:      req.IsEncrypted,
+				CreatedAt:        time.Now().UTC(),
+				UpdatedAt:        time.Now().UTC(),
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": models.CloudPushResult{
+					ProjectID:  2025,
+					NewVersion: 1,
+					SyncedAt:   time.Now().UTC(),
+					Status:     "created",
+				},
+			})
+
+		case "/api/v1/sync/pull":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data":    storedOnServer,
+			})
+
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer mockCloud.Close()
+
+	// 3. Push project to cloud (E2EE)
+	pushRes, err := svc.PushProjectToCloud(ctx, mockCloud.URL, "zk.jwt.token", songID, 0)
+	if err != nil {
+		t.Fatalf("E2EE push failed: %v", err)
+	}
+	if pushRes.ProjectID != 2025 {
+		t.Fatalf("expected cloud project ID 2025, got %d", pushRes.ProjectID)
+	}
+
+	// Verify Zero-Knowledge guarantee on HTTP wire and server storage:
+	// Neither the raw HTTP body nor the server's stored record may contain plaintext composition data!
+	rawWireStr := string(rawPushWireBytes)
+	for _, secret := range []string{"Zero Knowledge Symphony", "Guitarra Principal", "(0.1 2.2).4", "Solo Take 1", "Recorded with condenser mic"} {
+		if strings.Contains(rawWireStr, secret) {
+			t.Errorf("Zero-Knowledge violation: HTTP push payload exposed plaintext %q", secret)
+		}
+	}
+	if !storedOnServer.IsEncrypted || storedOnServer.EncryptionAlgo != crypto.AlgorithmAES256GCM || storedOnServer.EncryptedPayload == "" {
+		t.Fatalf("expected server to store AES-256-GCM encrypted payload, got %+v", storedOnServer)
+	}
+	if len(storedOnServer.Tracks) != 0 || len(storedOnServer.AudioVersions) != 0 {
+		t.Fatalf("expected server plaintext Tracks and AudioVersions to be empty, got %d tracks and %d audio versions", len(storedOnServer.Tracks), len(storedOnServer.AudioVersions))
+	}
+
+	// 4. Verify that without the user's local key, pulling fails to decrypt
+	attackerSvc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+	attackerKey, _ := crypto.GenerateKey()
+	_ = attackerSvc.SetEncryptionKey(attackerKey)
+	if _, _, err := attackerSvc.PullProjectFromCloud(ctx, mockCloud.URL, "zk.jwt.token", 2025); err == nil {
+		t.Fatalf("expected pull with wrong local key to fail decryption")
+	}
+
+	// 5. Pull project with the rightful local key into a fresh database
+	dbDest := setupSyncTestDB(t)
+	defer dbDest.Close()
+
+	destSongRepo := repository.NewSongRepository(dbDest)
+	destTrackRepo := repository.NewTrackRepository(dbDest)
+	destAudioRepo := repository.NewAudioRepository(dbDest)
+	destSvc := NewSyncClientService(destSongRepo, destTrackRepo, destAudioRepo)
+	_ = destSvc.SetEncryptionKey(localKey)
+
+	pulledProject, importedSongID, err := destSvc.PullProjectFromCloud(ctx, mockCloud.URL, "zk.jwt.token", 2025)
+	if err != nil {
+		t.Fatalf("E2EE pull and decrypt failed: %v", err)
+	}
+	if pulledProject.Title != "Zero Knowledge Symphony" {
+		t.Errorf("expected decrypted title 'Zero Knowledge Symphony', got %q", pulledProject.Title)
+	}
+
+	importedSong, err := destSongRepo.GetByID(ctx, importedSongID)
+	if err != nil {
+		t.Fatalf("failed to fetch imported song: %v", err)
+	}
+	if importedSong.Title != "Zero Knowledge Symphony" || importedSong.BPM != 128 || importedSong.KeySignature != "E minor" {
+		t.Errorf("imported song metadata mismatch: %+v", importedSong)
+	}
+
+	importedTracks, err := destTrackRepo.GetBySongID(ctx, importedSongID)
+	if err != nil || len(importedTracks) != 1 {
+		t.Fatalf("expected 1 imported track, got %d (err=%v)", len(importedTracks), err)
+	}
+	if importedTracks[0].Name != "Guitarra Principal" || importedTracks[0].DataContent != `\tempo 128 (0.1 2.2).4 (3.1 5.2).4 |` {
+		t.Errorf("imported track mismatch: %+v", importedTracks[0])
+	}
+
+	importedAudios, err := destAudioRepo.GetBySongID(ctx, importedSongID)
+	if err != nil || len(importedAudios) != 1 {
+		t.Fatalf("expected 1 imported audio version, got %d (err=%v)", len(importedAudios), err)
+	}
+	if importedAudios[0].VersionName != "Solo Take 1" {
+		t.Errorf("expected audio version 'Solo Take 1', got %q", importedAudios[0].VersionName)
+	}
+
+	// Verify the restored .wav file on disk matches the original bytes
+	restoredWavBytes, err := os.ReadFile(importedAudios[0].FilePath)
+	if err != nil {
+		t.Fatalf("failed to read restored wav file at %s: %v", importedAudios[0].FilePath, err)
+	}
+	if !bytes.Equal(restoredWavBytes, wavContent) {
+		t.Errorf("restored wav file bytes do not match original wav content")
+	}
 }

@@ -210,25 +210,39 @@ export const syncStore = {
 
         try {
             let result: CloudPushResult;
-            try {
-                result = await syncApi.pushProject(
-                    buildPayload(remoteCloudId, baseVersion),
+            const wailsSync =
+                typeof window !== "undefined"
+                    ? (window as any).go?.bindings?.SyncHandler || (window as any).go?.main?.App
+                    : null;
+
+            if (wailsSync && typeof wailsSync.PushProjectToCloud === "function") {
+                result = await wailsSync.PushProjectToCloud(
+                    state.cloudUrl,
                     state.token,
-                    state.cloudUrl
+                    song.id,
+                    baseVersion
                 );
-            } catch (err) {
-                // Self-healing: if server was restarted and lost the in-memory cloud project,
-                // re-push as a new cloud project (project_id = 0).
-                const errMsg = err instanceof Error ? err.message : String(err);
-                if (remoteCloudId > 0 && errMsg.includes("cloud project not found")) {
-                    console.warn(`Cloud project ${remoteCloudId} not found on server. Re-creating as new cloud project...`);
+            } else {
+                try {
                     result = await syncApi.pushProject(
-                        buildPayload(0, 0),
+                        buildPayload(remoteCloudId, baseVersion),
                         state.token,
                         state.cloudUrl
                     );
-                } else {
-                    throw err;
+                } catch (err) {
+                    // Self-healing: if server was restarted and lost the in-memory cloud project,
+                    // re-push as a new cloud project (project_id = 0).
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    if (remoteCloudId > 0 && errMsg.includes("cloud project not found")) {
+                        console.warn(`Cloud project ${remoteCloudId} not found on server. Re-creating as new cloud project...`);
+                        result = await syncApi.pushProject(
+                            buildPayload(0, 0),
+                            state.token,
+                            state.cloudUrl
+                        );
+                    } else {
+                        throw err;
+                    }
                 }
             }
 
@@ -264,6 +278,13 @@ export const syncStore = {
         const state = get(internalStore);
         if (!state.isAuthenticated || !state.token) {
             throw new Error("Debes iniciar sesión para consultar tus proyectos en la nube.");
+        }
+        const wailsSync =
+            typeof window !== "undefined"
+                ? (window as any).go?.bindings?.SyncHandler || (window as any).go?.main?.App
+                : null;
+        if (wailsSync && typeof wailsSync.ListCloudProjects === "function") {
+            return (await wailsSync.ListCloudProjects(state.cloudUrl, state.token)) || [];
         }
         return await syncApi.listProjects(state.token, state.cloudUrl);
     },

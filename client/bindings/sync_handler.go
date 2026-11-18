@@ -47,3 +47,13 @@ func (h *SyncHandler) PullAndImportProject(cloudURL string, token string, projec
 	_, songID, err := h.syncService.PullProjectFromCloud(context.Background(), cloudURL, token, projectID)
 	return songID, err
 }
+
+// ListCloudProjects retrieves and locally decrypts the user's cloud projects.
+func (h *SyncHandler) ListCloudProjects(cloudURL string, token string) ([]models.CloudProject, error) {
+	return h.syncService.ListCloudProjects(context.Background(), cloudURL, token)
+}
+
+// GetEncryptionKeyFingerprint returns the short SHA-256 fingerprint of the local E2EE key.
+func (h *SyncHandler) GetEncryptionKeyFingerprint() string {
+	return h.syncService.GetKeyFingerprint()
+}
