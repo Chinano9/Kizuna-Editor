@@ -21,6 +21,7 @@
 
     import { activeTrackIndex } from "@/stores/trackStore";
     import { song } from "@/stores/projectStore";
+    import { instrumentStore } from "@/stores/instrumentStore";
     import { toastStore } from "@shared/stores/toastStore";
     import type { Instrument, Track } from "@shared/types/wails";
 
@@ -40,7 +41,15 @@
 
     let instruments: Instrument[] = [];
 
+    $: if ($instrumentStore && $instrumentStore.length > 0) {
+        instruments = $instrumentStore;
+    }
+
     onMount(async () => {
+        if ($instrumentStore && $instrumentStore.length > 0) {
+            instruments = $instrumentStore;
+            return;
+        }
         try {
             instruments = (await GetInstruments()) ?? [];
         } catch (err) {

@@ -21,6 +21,7 @@ package audio
 import (
 	"encoding/hex"
 	"fmt"
+	"sync"
 
 	"github.com/gen2brain/malgo"
 )
@@ -31,8 +32,35 @@ type AudioDevice struct {
 	Name string `json:"name"`
 }
 
+var (
+	deviceCacheMu     sync.Mutex
+	cachedDevices     []AudioDevice
+	cachedDriverName  string
+	hasDeviceCacheHit bool
+)
+
+// InvalidateDeviceCache clears the cached capture device list when switching audio drivers.
+func InvalidateDeviceCache() {
+	deviceCacheMu.Lock()
+	defer deviceCacheMu.Unlock()
+	cachedDevices = nil
+	cachedDriverName = ""
+	hasDeviceCacheHit = false
+}
+
 // GetInputDevices queries malgo to enumerate all available physical microphone/capture devices.
 func GetInputDevices() ([]AudioDevice, error) {
+	driver := GetCurrentDriver()
+
+	deviceCacheMu.Lock()
+	if hasDeviceCacheHit && cachedDriverName == driver {
+		out := make([]AudioDevice, len(cachedDevices))
+		copy(out, cachedDevices)
+		deviceCacheMu.Unlock()
+		return out, nil
+	}
+	deviceCacheMu.Unlock()
+
 	ctx, err := GetSharedContext()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get shared audio context: %w", err)
@@ -50,6 +78,14 @@ func GetInputDevices() ([]AudioDevice, error) {
 			Name: dev.Name(),
 		})
 	}
+
+	deviceCacheMu.Lock()
+	cachedDevices = make([]AudioDevice, len(list))
+	copy(cachedDevices, list)
+	cachedDriverName = driver
+	hasDeviceCacheHit = true
+	deviceCacheMu.Unlock()
+
 	return list, nil
 }
 

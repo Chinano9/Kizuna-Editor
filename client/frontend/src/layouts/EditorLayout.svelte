@@ -1,7 +1,7 @@
 <script lang="ts">
+    import { onDestroy } from "svelte";
     import { GetSong } from "../../wailsjs/go/main/App";
 
-    import Toolbar from "@/components/Toolbar.svelte";
     import Editor from "@/components/Editor.svelte";
     import ScoreViewer from "@/components/ScoreViewer.svelte";
     import TrackTabs from "@/components/TrackTabs.svelte";
@@ -11,10 +11,12 @@
     import { songId, song, activeSongStore } from "@/stores/projectStore";
     import { currentView } from "@/stores/viewStore";
     import { activeTrackIndex } from "@/stores/trackStore";
+    import { audioPlayerStore } from "@/features/audio-deck/stores/audioPlayerStore";
     import { toastStore } from "@shared/stores/toastStore";
-    import { Track, Song } from "@shared/types/wails";
+    import { Track } from "@shared/types/wails";
 
     let activeTrack: Track | null = null;
+    let distractionFree = false;
 
     // --- Reactive Data Loading ---
     $: {
@@ -23,7 +25,6 @@
 
     async function loadSong(id: number) {
         if (id === 0) {
-            // If the store is not already initialized, create default structure
             if (!$song || !$song.tracks || $song.tracks.length === 0) {
                 activeSongStore.createNewSong();
             }
@@ -31,8 +32,11 @@
             return;
         }
 
+        if ($song && $song.id === id && $song.tracks && $song.tracks.length > 0) {
+            return;
+        }
+
         try {
-            console.log("Loading full content for ID:", id);
             const songData = await GetSong(id);
             if (songData) {
                 song.set(songData);
@@ -44,8 +48,7 @@
         }
     }
 
-    // This reactive block now simply keeps `activeTrack` in sync.
-    // The actual data binding will happen inside the Editor component.
+    // Keep `activeTrack` in sync with activeSongStore and activeTrackIndex
     $: {
         if ($song && $song.tracks) {
             activeTrack = $song.tracks[$activeTrackIndex] ?? null;
@@ -54,30 +57,58 @@
         }
     }
 
+    function handleSeekFromScore(event: CustomEvent<number>) {
+        audioPlayerStore.requestSeek(event.detail);
+    }
+
+    function handleTogglePlayFromScore() {
+        audioPlayerStore.requestTogglePlay();
+    }
+
     function goBack() {
+        audioPlayerStore.reset();
         currentView.set("dashboard");
     }
+
+    onDestroy(() => {
+        audioPlayerStore.reset();
+    });
 </script>
 
 <div class="layout-wrapper">
-    <div class="top-nav">
-        <button class="back-btn" on:click={goBack}>← Back to Library</button>
-        <div class="spacer"></div>
-        <AlbumSelector />
-    </div>
+    {#if !distractionFree}
+        <div class="top-nav">
+            <button class="back-btn" on:click={goBack}>← Back to Library</button>
+            <div class="spacer" />
+        </div>
 
-    <TrackTabs />
+        <TrackTabs />
+    {/if}
+
     <div class="editor-workspace">
         {#if activeTrack}
-            <Editor bind:track={activeTrack} />
-            <ScoreViewer track={activeTrack} />
+            <Editor
+                bind:track={activeTrack}
+                bind:distractionFree
+            />
+            <ScoreViewer
+                track={activeTrack}
+                isPlaying={$audioPlayerStore.isPlaying}
+                playbackPosition={$audioPlayerStore.positionSeconds}
+                playbackDuration={$audioPlayerStore.durationSeconds}
+                on:seek={handleSeekFromScore}
+                on:togglePlay={handleTogglePlayFromScore}
+            />
         {:else}
             <div class="placeholder">Select a track to start editing.</div>
         {/if}
     </div>
 
     {#if activeTrack}
-        <Workbar songID={$songId} activeTrack={activeTrack} />
+        <Workbar
+            songID={$songId}
+            activeTrack={activeTrack}
+        />
     {/if}
 </div>
 

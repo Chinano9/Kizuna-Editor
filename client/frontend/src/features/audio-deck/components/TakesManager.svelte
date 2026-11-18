@@ -34,6 +34,7 @@
                     {take.version_name.replace("Take: ", "")}
                 </option>
             {/each}
+            <option value="">Solo AlphaTex (Sin grabación)</option>
         {/if}
     </select>
 </div>
