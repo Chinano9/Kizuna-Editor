@@ -66,6 +66,10 @@ export function GetCurrentDriver() {
   return window['go']['main']['App']['GetCurrentDriver']();
 }
 
+export function GetEncryptionKeyFingerprint() {
+  return window['go']['main']['App']['GetEncryptionKeyFingerprint']();
+}
+
 export function GetInputDevices() {
   return window['go']['main']['App']['GetInputDevices']();
 }
@@ -96,6 +100,10 @@ export function GetSong(arg1) {
 
 export function ListAlbums() {
   return window['go']['main']['App']['ListAlbums']();
+}
+
+export function ListCloudProjects(arg1, arg2) {
+  return window['go']['main']['App']['ListCloudProjects'](arg1, arg2);
 }
 
 export function PauseAudio() {

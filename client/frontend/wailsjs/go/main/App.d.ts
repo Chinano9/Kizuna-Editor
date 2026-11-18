@@ -36,6 +36,8 @@ export function GetAvailableDrivers():Promise<Array<string>>;
 
 export function GetCurrentDriver():Promise<string>;
 
+export function GetEncryptionKeyFingerprint():Promise<string>;
+
 export function GetInputDevices():Promise<Array<audio.AudioDevice>>;
 
 export function GetInstruments():Promise<Array<models.Instrument>>;
@@ -51,6 +53,8 @@ export function GetRecentSongs():Promise<Array<models.Song>>;
 export function GetSong(arg1:number):Promise<models.Song>;
 
 export function ListAlbums():Promise<Array<models.Album>>;
+
+export function ListCloudProjects(arg1:string,arg2:string):Promise<Array<models.CloudProject>>;
 
 export function PauseAudio():Promise<void>;
 

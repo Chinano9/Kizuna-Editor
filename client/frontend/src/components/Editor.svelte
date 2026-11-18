@@ -17,11 +17,11 @@
       along with this program.  If not, see <https://www.gnu.org/licenses/>.
     */
 
-    import { createEventDispatcher } from "svelte";
+    import { createEventDispatcher, onDestroy } from "svelte";
     import "../styles/editor-theme.css";
 
     import type { Track } from "@shared/types/wails";
-    import { activeSongStore } from "@/stores/projectStore";
+    import { activeSongStore, autoSaveStore } from "@/stores/projectStore";
     import { instrumentStore } from "@/stores/instrumentStore";
     import { looksLikeAlphaTex } from "@shared/lib/musicUtils";
 
@@ -51,6 +51,7 @@
     function handleInput() {
         if (!track) return;
         activeSongStore.updateTrack(track);
+        autoSaveStore.scheduleSave();
         dispatch("contentChange", track.data_content);
     }
 
@@ -85,6 +86,7 @@
 
         track.data_content = current.slice(0, start) + effectiveSnippet + current.slice(end);
         activeSongStore.updateTrack(track);
+        autoSaveStore.scheduleSave();
         dispatch("contentChange", track.data_content);
 
         requestAnimationFrame(() => {
@@ -110,6 +112,7 @@
             event.preventDefault();
             track.data_content = pasted;
             activeSongStore.updateTrack(track);
+            autoSaveStore.scheduleSave();
             dispatch("contentChange", track.data_content);
             requestAnimationFrame(() => {
                 if (!textareaEl) return;
@@ -118,6 +121,10 @@
             });
         }
     }
+
+    onDestroy(() => {
+        void autoSaveStore.flushIfPending();
+    });
 
     function handleKeydown(event: KeyboardEvent) {
         if (event.altKey && event.key.toLowerCase() === "z") {
@@ -237,6 +244,17 @@
     <div class="editor-status-footer">
         <span>Líneas: {lineCount}</span>
         <span>Tokens: {wordCount}</span>
+        <span class="autosave-indicator {$autoSaveStore.status}">
+            {#if $autoSaveStore.status === "pending"}
+                ⏳ Guardando al pausar...
+            {:else if $autoSaveStore.status === "saving"}
+                💾 Autoguardando...
+            {:else if $autoSaveStore.status === "saved"}
+                ✓ Guardado localmente
+            {:else if $autoSaveStore.status === "error"}
+                ⚠️ Error al autoguardar
+            {/if}
+        </span>
         {#if distractionFree}
             <span class="focus-hint">Modo sin distracciones activo (Alt+Z)</span>
         {/if}
@@ -393,5 +411,23 @@
     .focus-hint {
         margin-left: auto;
         color: var(--lcd-amber, #ffc966);
+    }
+
+    .autosave-indicator {
+        font-size: 0.7rem;
+        transition: color 0.2s ease;
+    }
+
+    .autosave-indicator.pending,
+    .autosave-indicator.saving {
+        color: var(--lcd-amber, #ffc966);
+    }
+
+    .autosave-indicator.saved {
+        color: #50fa7b;
+    }
+
+    .autosave-indicator.error {
+        color: #ff6b6b;
     }
 </style>
