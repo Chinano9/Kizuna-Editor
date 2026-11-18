@@ -31,6 +31,7 @@ type SongRepository interface {
 	GetByID(ctx context.Context, id int) (*models.Song, error)
 	GetRecent(ctx context.Context, limit int) ([]models.Song, error)
 	GetByAlbumID(ctx context.Context, albumID int) ([]models.Song, error)
+	ReorderAlbumSongs(ctx context.Context, albumID int, songIDs []int) error
 	Update(ctx context.Context, tx *sql.Tx, song *models.Song) error
 	UpdateTitle(ctx context.Context, tx *sql.Tx, id int, title string) error
 	Delete(ctx context.Context, id int) error
@@ -144,7 +145,7 @@ func (r *SQLiteSongRepository) GetRecent(ctx context.Context, limit int) ([]mode
 func (r *SQLiteSongRepository) GetByAlbumID(ctx context.Context, albumID int) ([]models.Song, error) {
 	query := `
 		SELECT id, album_id, title, bpm, time_signature, key_signature, created_at, updated_at
-		FROM songs WHERE album_id = ? ORDER BY title ASC`
+		FROM songs WHERE album_id = ? ORDER BY album_position IS NULL, album_position ASC, title ASC, id ASC`
 
 	rows, err := r.db.QueryContext(ctx, query, albumID)
 	if err != nil {
@@ -157,7 +158,7 @@ func (r *SQLiteSongRepository) GetByAlbumID(ctx context.Context, albumID int) ([
 		var s models.Song
 		var ts, ks sql.NullString
 		if err := rows.Scan(&s.ID, &s.AlbumID, &s.Title, &s.BPM, &ts, &ks, &s.CreatedAt, &s.UpdatedAt); err != nil {
-			continue
+			return nil, fmt.Errorf("scan album song: %w", err)
 		}
 		if ts.Valid {
 			s.TimeSignature = ts.String
@@ -167,7 +168,7 @@ func (r *SQLiteSongRepository) GetByAlbumID(ctx context.Context, albumID int) ([
 		}
 		songs = append(songs, s)
 	}
-	return songs, nil
+	return songs, rows.Err()
 }
 
 // Update updates an existing song's metadata, optionally inside an existing transaction.
@@ -178,6 +179,7 @@ func (r *SQLiteSongRepository) Update(ctx context.Context, tx *sql.Tx, song *mod
 
 	query := `
 		UPDATE songs SET
+			album_position = CASE WHEN album_id IS ? THEN album_position ELSE NULL END,
 			album_id = ?,
 			title = ?,
 			bpm = ?,
@@ -188,9 +190,9 @@ func (r *SQLiteSongRepository) Update(ctx context.Context, tx *sql.Tx, song *mod
 
 	var err error
 	if tx != nil {
-		_, err = tx.ExecContext(ctx, query, song.AlbumID, song.Title, song.BPM, song.TimeSignature, song.KeySignature, song.ID)
+		_, err = tx.ExecContext(ctx, query, song.AlbumID, song.AlbumID, song.Title, song.BPM, song.TimeSignature, song.KeySignature, song.ID)
 	} else {
-		_, err = r.db.ExecContext(ctx, query, song.AlbumID, song.Title, song.BPM, song.TimeSignature, song.KeySignature, song.ID)
+		_, err = r.db.ExecContext(ctx, query, song.AlbumID, song.AlbumID, song.Title, song.BPM, song.TimeSignature, song.KeySignature, song.ID)
 	}
 
 	if err != nil {
@@ -225,10 +227,51 @@ func (r *SQLiteSongRepository) Delete(ctx context.Context, id int) error {
 
 // SetAlbum assigns or removes a song from an album.
 func (r *SQLiteSongRepository) SetAlbum(ctx context.Context, songID int, albumID *int) error {
-	query := "UPDATE songs SET album_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-	_, err := r.db.ExecContext(ctx, query, albumID, songID)
+	query := "UPDATE songs SET album_position = CASE WHEN album_id IS ? THEN album_position ELSE NULL END, album_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+	_, err := r.db.ExecContext(ctx, query, albumID, albumID, songID)
 	if err != nil {
 		return fmt.Errorf("set album for song %d: %w", songID, err)
 	}
 	return nil
+}
+
+// ReorderAlbumSongs stores the complete order atomically without modifying project content.
+func (r *SQLiteSongRepository) ReorderAlbumSongs(ctx context.Context, albumID int, songIDs []int) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM albums WHERE id = ?", albumID).Scan(&count); err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("album %d not found", albumID)
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM songs WHERE album_id = ?", albumID).Scan(&count); err != nil {
+		return err
+	}
+	if count != len(songIDs) {
+		return fmt.Errorf("album membership changed; reload the album")
+	}
+	seen := make(map[int]bool, len(songIDs))
+	for i, id := range songIDs {
+		if seen[id] {
+			return fmt.Errorf("duplicate song %d", id)
+		}
+		seen[id] = true
+		result, err := tx.ExecContext(ctx, "UPDATE songs SET album_position = ? WHERE id = ? AND album_id = ?", i+1, id, albumID)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return fmt.Errorf("song %d does not belong to album %d", id, albumID)
+		}
+	}
+	return tx.Commit()
 }

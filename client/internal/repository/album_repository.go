@@ -127,18 +127,48 @@ func (r *SQLiteAlbumRepository) Update(ctx context.Context, album *models.Album)
 	}
 
 	query := `UPDATE albums SET title = ?, artist = ?, description = ? WHERE id = ?`
-	_, err := r.db.ExecContext(ctx, query, album.Title, album.Artist, album.Description, album.ID)
+	result, err := r.db.ExecContext(ctx, query, album.Title, album.Artist, album.Description, album.ID)
 	if err != nil {
 		return fmt.Errorf("update album %d: %w", album.ID, err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("album with id %d not found", album.ID)
 	}
 	return nil
 }
 
-// Delete removes an album by its ID (songs linked will have album_id set to NULL due to SET NULL fk).
+// Delete removes only the album and its song associations, never the songs.
+// Explicitly clearing the association in the same transaction protects songs
+// even if an existing database has different foreign-key settings.
 func (r *SQLiteAlbumRepository) Delete(ctx context.Context, id int) error {
-	_, err := r.db.ExecContext(ctx, "DELETE FROM albums WHERE id = ?", id)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin album deletion transaction %d: %w", id, err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, "UPDATE songs SET album_id = NULL, album_position = NULL, updated_at = CURRENT_TIMESTAMP WHERE album_id = ?", id); err != nil {
+		return fmt.Errorf("unlink songs from album %d: %w", id, err)
+	}
+
+	result, err := tx.ExecContext(ctx, "DELETE FROM albums WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("delete album %d: %w", id, err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check deletion of album %d: %w", id, err)
+	}
+	if deleted == 0 {
+		return fmt.Errorf("album with id %d not found", id)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit album deletion %d: %w", id, err)
 	}
 	return nil
 }
