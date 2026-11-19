@@ -110,6 +110,16 @@ func (a *App) GetEncryptionKeyFingerprint() string {
 	return a.syncHandler.GetEncryptionKeyFingerprint()
 }
 
+// ShareProject invites a collaborator to a remote cloud project (Issue #15).
+func (a *App) ShareProject(cloudID string, collaboratorIdentifier string) error {
+	return a.syncHandler.ShareProject(cloudID, collaboratorIdentifier)
+}
+
+// SetCloudSession configures active session parameters in the sync presentation facade.
+func (a *App) SetCloudSession(cloudURL string, token string) {
+	a.syncHandler.SetCloudSession(cloudURL, token)
+}
+
 // --- Song Operations (Delegated to SongHandler) ---
 
 // SaveQuickIdea persists the current editor content to the local database.

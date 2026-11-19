@@ -8,6 +8,7 @@ import type { CloudPushPayload, CloudPushResult, CloudProject, SyncProgressPaylo
 import { authApi, authStorage, DEFAULT_CLOUD_URL } from "../services/authApi.ts";
 import { syncApi } from "../services/syncApi.ts";
 import type { Song, AudioVersion } from "@shared/types/wails";
+import { activeSongStore } from "../../editor/stores/activeSongStore.ts";
 
 export interface CloudProjectMeta {
     cloudProjectId: number;
@@ -218,12 +219,17 @@ export const syncStore = {
                     ? (window as any).go?.bindings?.SyncHandler || (window as any).go?.main?.App
                     : null;
             if (wailsSync && typeof wailsSync.PushProjectToCloud === "function") {
-                result = await wailsSync.PushProjectToCloud(
-                    state.cloudUrl,
-                    state.token,
-                    song.id,
-                    baseVersion
-                );
+                try {
+                    result = await wailsSync.PushProjectToCloud(state.cloudUrl, state.token, song.id, baseVersion);
+                } catch (err) {
+                    const errMsg = err instanceof Error ? err.message : String(err);
+                    if (baseVersion > 0 && errMsg.includes("cloud project not found")) {
+                        console.warn("Cloud project not found on server. Re-creating as initial cloud project (version = 0)...");
+                        result = await wailsSync.PushProjectToCloud(state.cloudUrl, state.token, song.id, 0);
+                    } else {
+                        throw err;
+                    }
+                }
             } else {
                 try {
                     result = await syncApi.pushProject(
@@ -258,6 +264,9 @@ export const syncStore = {
             };
 
             saveStoredMappings(updatedMappings);
+
+            // Update activeSongStore with cloud_id on push
+            activeSongStore.setCloudId(result.project_id);
 
             internalStore.update((s) => ({
                 ...s,
@@ -326,6 +335,9 @@ export const syncStore = {
             };
             saveStoredMappings(updatedMappings);
 
+            // Update activeSongStore with cloud_id on pull import
+            activeSongStore.setCloudId(cloudProjectId);
+
             internalStore.update((s) => ({
                 ...s,
                 isSyncing: false,
@@ -365,4 +377,23 @@ export const syncStore = {
 
     clearError: () =>
         internalStore.update((s) => ({ ...s, authError: null })),
+
+    getCloudIdForSong: (songId: number): number | null => {
+        const state = get(internalStore);
+        return state.cloudProjectMappings[songId]?.cloudProjectId ?? null;
+    },
+
+    setMapping: (songId: number, meta: CloudProjectMeta) => {
+        internalStore.update((s) => {
+            const updated = {
+                ...s.cloudProjectMappings,
+                [songId]: meta,
+            };
+            saveStoredMappings(updated);
+            return {
+                ...s,
+                cloudProjectMappings: updated,
+            };
+        });
+    },
 };

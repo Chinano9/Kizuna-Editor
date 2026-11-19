@@ -199,4 +199,54 @@ func TestKizunaCloudAPI_EndToEndFlow(t *testing.T) {
 			t.Errorf("pulled project mismatch: %+v", pulled)
 		}
 	})
+
+	// 8. Test Share Project with Collaborator (Issue #15)
+	t.Run("Share project with collaborator", func(t *testing.T) {
+		shareURL := fmt.Sprintf("%s/api/v1/projects/%d/share", server.URL, projectID)
+		body, _ := json.Marshal(map[string]string{
+			"collaborator": "ritchie@deep-purple.com",
+		})
+		req, _ := http.NewRequest("POST", shareURL, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+authToken)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("share request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+		}
+
+		// Sharing the same collaborator again should return 409 Conflict
+		req2, _ := http.NewRequest("POST", shareURL, bytes.NewReader(body))
+		req2.Header.Set("Authorization", "Bearer "+authToken)
+		req2.Header.Set("Content-Type", "application/json")
+		resp2, err := client.Do(req2)
+		if err != nil {
+			t.Fatalf("duplicate share request failed: %v", err)
+		}
+		defer resp2.Body.Close()
+
+		if resp2.StatusCode != http.StatusConflict {
+			t.Errorf("expected 409 Conflict on duplicate share, got %d", resp2.StatusCode)
+		}
+
+		// Sharing a non-existent project should return 404
+		nonExistentURL := fmt.Sprintf("%s/api/v1/projects/%d/share", server.URL, 99999)
+		req3, _ := http.NewRequest("POST", nonExistentURL, bytes.NewReader(body))
+		req3.Header.Set("Authorization", "Bearer "+authToken)
+		req3.Header.Set("Content-Type", "application/json")
+		resp3, err := client.Do(req3)
+		if err != nil {
+			t.Fatalf("non-existent share request failed: %v", err)
+		}
+		defer resp3.Body.Close()
+
+		if resp3.StatusCode != http.StatusNotFound {
+			t.Errorf("expected 404 Not Found, got %d", resp3.StatusCode)
+		}
+	})
 }

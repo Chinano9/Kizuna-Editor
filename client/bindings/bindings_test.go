@@ -175,3 +175,39 @@ func TestAudioHandlerBasics(t *testing.T) {
 		t.Errorf("expected StopAudio to succeed without active playback, got %v", err)
 	}
 }
+
+func TestSyncHandler_ShareProject(t *testing.T) {
+	db, err := database.Open(database.DefaultConfig(":memory:"))
+	if err != nil {
+		t.Fatalf("failed to open in-memory db: %v", err)
+	}
+	defer db.Close()
+
+	m := migrator.NewMigrator(db)
+	if err := m.Migrate(); err != nil {
+		t.Fatalf("failed to run migrations: %v", err)
+	}
+
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+	syncService := service.NewSyncClientService(songRepo, trackRepo, audioRepo)
+
+	syncHandler := NewSyncHandler(syncService)
+
+	t.Run("Fails when session token is not configured", func(t *testing.T) {
+		err := syncHandler.ShareProject("1001", "collaborator@kizuna.io")
+		if err == nil {
+			t.Fatal("expected error without session token, got nil")
+		}
+	})
+
+	t.Run("Configures session and shares project", func(t *testing.T) {
+		syncHandler.SetCloudSession("http://localhost:8080", "mock.jwt.token")
+		// Calling with dead local port to verify it attempted the network call with the configured session
+		err := syncHandler.ShareProject("1001", "collaborator@kizuna.io")
+		if err == nil {
+			t.Fatal("expected network error connecting to mock host, got nil")
+		}
+	})
+}

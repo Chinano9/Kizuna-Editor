@@ -17,3 +17,15 @@ export function PullAndImportProject(arg1, arg2, arg3) {
 export function PushProjectToCloud(arg1, arg2, arg3, arg4) {
   return window['go']['bindings']['SyncHandler']['PushProjectToCloud'](arg1, arg2, arg3, arg4);
 }
+
+export function SetCloudSession(arg1, arg2) {
+  return window['go']['bindings']['SyncHandler']['SetCloudSession'](arg1, arg2);
+}
+
+export function SetContext(arg1) {
+  return window['go']['bindings']['SyncHandler']['SetContext'](arg1);
+}
+
+export function ShareProject(arg1, arg2) {
+  return window['go']['bindings']['SyncHandler']['ShareProject'](arg1, arg2);
+}

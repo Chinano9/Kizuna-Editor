@@ -434,7 +434,6 @@ func TestSyncClientService_PullProjectFromCloud(t *testing.T) {
 
 func TestSyncClientService_ZeroKnowledgeE2EE_PushAndPullWithAudio(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())
-
 	db := setupSyncTestDB(t)
 	defer db.Close()
 
@@ -631,4 +630,113 @@ func TestSyncClientService_ZeroKnowledgeE2EE_PushAndPullWithAudio(t *testing.T) 
 	if !bytes.Equal(restoredWavBytes, wavContent) {
 		t.Errorf("restored wav file bytes do not match original wav content")
 	}
+}
+
+func TestSyncClientService_ShareProject(t *testing.T) {
+	db := setupSyncTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+
+	t.Run("Rejects empty or invalid parameters", func(t *testing.T) {
+		err := svc.ShareProject(ctx, "http://localhost:8080", "token", "", "collab@kizuna.io")
+		if err == nil || err.Error() != "el identificador del proyecto remoto es inválido" {
+			t.Fatalf("expected invalid cloud id error, got %v", err)
+		}
+
+		err = svc.ShareProject(ctx, "http://localhost:8080", "token", "1001", "   ")
+		if err == nil || err.Error() != "debes ingresar el correo o nombre de usuario del colaborador" {
+			t.Fatalf("expected empty collaborator error, got %v", err)
+		}
+
+		err = svc.ShareProject(ctx, "http://localhost:8080", "   ", "1001", "collab@kizuna.io")
+		if err == nil || err.Error() != "sesión expirada: inicia sesión en Kizuna Cloud para compartir" {
+			t.Fatalf("expected empty token error, got %v", err)
+		}
+	})
+
+	t.Run("Successfully sends share invitation (HTTP 200)", func(t *testing.T) {
+		var receivedPath string
+		var receivedAuth string
+		var receivedBody map[string]string
+
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedPath = r.URL.Path
+			receivedAuth = r.Header.Get("Authorization")
+			_ = json.NewDecoder(r.Body).Decode(&receivedBody)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"message": "collaborator added successfully",
+			})
+		}))
+		defer mockServer.Close()
+
+		err := svc.ShareProject(ctx, mockServer.URL, "secret.jwt.token", "1001", "rory@gallagher.com")
+		if err != nil {
+			t.Fatalf("unexpected error sharing project: %v", err)
+		}
+
+		if receivedPath != "/api/v1/projects/1001/share" {
+			t.Errorf("expected path /api/v1/projects/1001/share, got %s", receivedPath)
+		}
+		if receivedAuth != "Bearer secret.jwt.token" {
+			t.Errorf("expected Bearer secret.jwt.token, got %s", receivedAuth)
+		}
+		if receivedBody["collaborator"] != "rory@gallagher.com" {
+			t.Errorf("expected collaborator rory@gallagher.com, got %v", receivedBody)
+		}
+	})
+
+	t.Run("Maps HTTP status codes to descriptive error messages", func(t *testing.T) {
+		statusCodes := []struct {
+			status       int
+			expectedPart string
+		}{
+			{http.StatusBadRequest, "datos de invitación inválidos"},
+			{http.StatusUnauthorized, "sesión no autorizada en Kizuna Cloud"},
+			{http.StatusForbidden, "solo el propietario del proyecto puede invitar colaboradores"},
+			{http.StatusNotFound, "Usuario no encontrado en Kizuna Cloud"},
+			{http.StatusConflict, "el usuario ya es colaborador de este proyecto"},
+			{http.StatusInternalServerError, "error del servidor Kizuna Cloud (HTTP 500)"},
+		}
+
+		for _, tc := range statusCodes {
+			t.Run(http.StatusText(tc.status), func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(tc.status)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": false,
+						"error":   map[string]string{"message": "error"},
+					})
+				}))
+				defer server.Close()
+
+				err := svc.ShareProject(ctx, server.URL, "token", "1001", "musician@kizuna.io")
+				if err == nil {
+					t.Fatalf("expected error for HTTP %d, got nil", tc.status)
+				}
+				if err.Error() != tc.expectedPart {
+					t.Errorf("expected error %q, got %q", tc.expectedPart, err.Error())
+				}
+			})
+		}
+	})
+
+	t.Run("Handles network connectivity failure gracefully", func(t *testing.T) {
+		// Use a dead local port to trigger connection refused
+		err := svc.ShareProject(ctx, "http://127.0.0.1:54321", "token", "1001", "musician@kizuna.io")
+		if err == nil {
+			t.Fatal("expected connection error, got nil")
+		}
+		if !strings.Contains(err.Error(), "no se pudo conectar con Kizuna Cloud") {
+			t.Errorf("expected connection error message, got %v", err)
+		}
+	})
 }

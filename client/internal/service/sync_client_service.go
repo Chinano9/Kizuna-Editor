@@ -348,8 +348,13 @@ func (s *SyncClientService) PackageProject(ctx context.Context, songID int, base
 		return nil, fmt.Errorf("failed to encrypt project bundle: %w", err)
 	}
 
+	cloudProjID := 0
+	if baseVersion > 0 {
+		cloudProjID = song.ID
+	}
+
 	return &models.CloudPushPayload{
-		ProjectID:        song.ID,
+		ProjectID:        cloudProjID,
 		Title:            song.Title,
 		BPM:              song.BPM,
 		TimeSignature:    song.TimeSignature,
@@ -880,4 +885,70 @@ func (s *SyncClientService) ListCloudProjects(
 	}
 
 	return result, nil
+}
+
+// ShareProject sends an invitation to Kizuna Cloud for a collaborator by email or username (Issue #15).
+func (s *SyncClientService) ShareProject(
+	ctx context.Context,
+	cloudURL string,
+	token string,
+	cloudID string,
+	collaboratorIdentifier string,
+) error {
+	cloudID = strings.TrimSpace(cloudID)
+	collaboratorIdentifier = strings.TrimSpace(collaboratorIdentifier)
+
+	if cloudID == "" {
+		return errors.New("el identificador del proyecto remoto es inválido")
+	}
+	if collaboratorIdentifier == "" {
+		return errors.New("debes ingresar el correo o nombre de usuario del colaborador")
+	}
+	if strings.TrimSpace(token) == "" {
+		return errors.New("sesión expirada: inicia sesión en Kizuna Cloud para compartir")
+	}
+	if strings.TrimSpace(cloudURL) == "" {
+		cloudURL = "http://localhost:8080"
+	}
+
+	payload := map[string]string{
+		"collaborator": collaboratorIdentifier,
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("error serializando petición: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("%s/api/v1/projects/%s/share", strings.TrimRight(cloudURL, "/"), cloudID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("error creando petición: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("no se pudo conectar con Kizuna Cloud: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated:
+		return nil
+	case http.StatusBadRequest:
+		return errors.New("datos de invitación inválidos")
+	case http.StatusUnauthorized:
+		return errors.New("sesión no autorizada en Kizuna Cloud")
+	case http.StatusForbidden:
+		return errors.New("solo el propietario del proyecto puede invitar colaboradores")
+	case http.StatusNotFound:
+		return errors.New("Usuario no encontrado en Kizuna Cloud")
+	case http.StatusConflict:
+		return errors.New("el usuario ya es colaborador de este proyecto")
+	default:
+		return fmt.Errorf("error del servidor Kizuna Cloud (HTTP %d)", resp.StatusCode)
+	}
+}
 }

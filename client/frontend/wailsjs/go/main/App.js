@@ -146,6 +146,14 @@ export function SetAudioVolume(arg1) {
   return window['go']['main']['App']['SetAudioVolume'](arg1);
 }
 
+export function SetCloudSession(arg1, arg2) {
+  return window['go']['main']['App']['SetCloudSession'](arg1, arg2);
+}
+
+export function ShareProject(arg1, arg2) {
+  return window['go']['main']['App']['ShareProject'](arg1, arg2);
+}
+
 export function SongHandler() {
   return window['go']['main']['App']['SongHandler']();
 }

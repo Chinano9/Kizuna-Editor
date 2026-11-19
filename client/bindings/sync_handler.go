@@ -27,15 +27,18 @@ import (
 
 // SyncHandler provides Wails presentation facade for cloud backup and synchronization (Issue #13).
 type SyncHandler struct {
-	syncService *service.SyncClientService
-	ctx         context.Context
+	syncService  *service.SyncClientService
+	ctx          context.Context
+	lastCloudURL string
+	lastToken    string
 }
 
 // NewSyncHandler instantiates a SyncHandler.
 func NewSyncHandler(syncService *service.SyncClientService) *SyncHandler {
 	return &SyncHandler{
-		syncService: syncService,
-		ctx:         context.Background(),
+		syncService:  syncService,
+		ctx:          context.Background(),
+		lastCloudURL: "http://localhost:8080",
 	}
 }
 
@@ -44,9 +47,18 @@ func (h *SyncHandler) SetContext(ctx context.Context) {
 	h.ctx = ctx
 }
 
+// SetCloudSession configures active session parameters for subsequent cloud operations.
+func (h *SyncHandler) SetCloudSession(cloudURL string, token string) {
+	if cloudURL != "" {
+		h.lastCloudURL = cloudURL
+	}
+	h.lastToken = token
+}
+
 // PushProjectToCloud packages local project metadata, tracks, and audio takes, and uploads them to Kizuna Cloud (Issue #13).
 func (h *SyncHandler) PushProjectToCloud(cloudURL string, token string, songID int, baseVersion int) (*models.CloudPushResult, error) {
 	log.Printf("[SyncHandler] Initiating cloud backup for song ID %d to %s", songID, cloudURL)
+	h.SetCloudSession(cloudURL, token)
 	ctx := h.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -57,6 +69,7 @@ func (h *SyncHandler) PushProjectToCloud(cloudURL string, token string, songID i
 // PullAndImportProject downloads a cloud project and unpacks/imports it into local SQLite (Issue #14).
 func (h *SyncHandler) PullAndImportProject(cloudURL string, token string, projectID int) (int, error) {
 	log.Printf("[SyncHandler] Initiating pull and import for cloud project ID %d from %s", projectID, cloudURL)
+	h.SetCloudSession(cloudURL, token)
 	ctx := h.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -73,4 +86,14 @@ func (h *SyncHandler) ListCloudProjects(cloudURL string, token string) ([]models
 // GetEncryptionKeyFingerprint returns the short SHA-256 fingerprint of the local E2EE key.
 func (h *SyncHandler) GetEncryptionKeyFingerprint() string {
 	return h.syncService.GetKeyFingerprint()
+}
+
+// ShareProject invites a collaborator by email or username to a remote cloud project (Issue #15).
+func (h *SyncHandler) ShareProject(cloudID string, collaboratorIdentifier string) error {
+	log.Printf("[SyncHandler] Sharing cloud project %s with %s", cloudID, collaboratorIdentifier)
+	ctx := h.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return h.syncService.ShareProject(ctx, h.lastCloudURL, h.lastToken, cloudID, collaboratorIdentifier)
 }

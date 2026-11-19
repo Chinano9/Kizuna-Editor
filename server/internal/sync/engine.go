@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"kizuna/server/internal/collaboration"
 	"kizuna/shared/models"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,6 +38,7 @@ var (
 type CloudProject struct {
 	ID               int                   `json:"id"`
 	OwnerID          string                `json:"owner_id"`
+	Collaborators    []string              `json:"collaborators,omitempty"`
 	Title            string                `json:"title"`
 	BPM              int                   `json:"bpm"`
 	TimeSignature    string                `json:"time_signature"`
@@ -193,7 +195,28 @@ func (e *Engine) Pull(projectID int) (*CloudProject, error) {
 	return project, nil
 }
 
-// ListUserProjects returns all projects belonging to a user.
+// Share adds a collaborator identifier to a cloud project (Issue #15).
+func (e *Engine) Share(projectID int, ownerID string, collaboratorIdentifier string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	project, exists := e.projects[projectID]
+	if !exists {
+		return ErrProjectNotFound
+	}
+	if project.OwnerID != ownerID {
+		return ErrUnauthorizedSync
+	}
+	for _, c := range project.Collaborators {
+		if strings.EqualFold(c, collaboratorIdentifier) {
+			return errors.New("el usuario ya es colaborador de este proyecto")
+		}
+	}
+	project.Collaborators = append(project.Collaborators, collaboratorIdentifier)
+	return nil
+}
+
+// ListUserProjects returns all projects belonging to or shared with a user.
 func (e *Engine) ListUserProjects(userID string) ([]*CloudProject, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -202,6 +225,13 @@ func (e *Engine) ListUserProjects(userID string) ([]*CloudProject, error) {
 	for _, p := range e.projects {
 		if p.OwnerID == userID {
 			list = append(list, p)
+			continue
+		}
+		for _, c := range p.Collaborators {
+			if strings.EqualFold(c, userID) {
+				list = append(list, p)
+				break
+			}
 		}
 	}
 	return list, nil

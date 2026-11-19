@@ -92,6 +92,7 @@ func SetupRouter(c *AppContainer) http.Handler {
 	// Protected Collaboration & Projects endpoints (Issues #15, #16, #22)
 	mux.HandleFunc("GET /api/v1/projects", handlers.AuthMiddleware(c.AuthService, c.ProjectHandler.ListProjects))
 	mux.HandleFunc("GET /api/v1/projects/{id}", handlers.AuthMiddleware(c.AuthService, c.ProjectHandler.GetProject))
+	mux.HandleFunc("POST /api/v1/projects/{id}/share", handlers.AuthMiddleware(c.AuthService, c.ProjectHandler.ShareProject))
 	mux.HandleFunc("POST /api/v1/projects/{id}/checkout", handlers.AuthMiddleware(c.AuthService, c.ProjectHandler.CheckoutProject))
 	mux.HandleFunc("POST /api/v1/projects/{id}/release", handlers.AuthMiddleware(c.AuthService, c.ProjectHandler.ReleaseProject))
 

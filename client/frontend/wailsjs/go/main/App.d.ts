@@ -76,6 +76,10 @@ export function SetAudioDriver(arg1:string):Promise<void>;
 
 export function SetAudioVolume(arg1:number):Promise<void>;
 
+export function SetCloudSession(arg1:string,arg2:string):Promise<void>;
+
+export function ShareProject(arg1:string,arg2:string):Promise<void>;
+
 export function SongHandler():Promise<bindings.SongHandler>;
 
 export function StartQuickIdeaRecording(arg1:string):Promise<void>;

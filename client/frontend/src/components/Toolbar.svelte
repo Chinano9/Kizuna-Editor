@@ -21,13 +21,15 @@
     import { get } from "svelte/store";
     import { onMount } from "svelte";
     import { SaveSong, GetAudioVersionsForSong } from "../../wailsjs/go/main/App";
-    import { song, autoBar, autoSaveStore } from "../stores/projectStore";
+    import { song, autoBar, autoSaveStore, activeSongStore } from "../stores/projectStore";
     import { syncStore } from "@/features/cloud-sync/stores/syncStore";
     import AuthModal from "@/features/cloud-sync/components/AuthModal.svelte";
+    import ShareProjectModal from "@/features/cloud-sync/components/ShareProjectModal.svelte";
     import { toastStore } from "@shared/stores/toastStore";
     import type { AudioVersion } from "@shared/types/wails";
 
     let isAuthModalOpen = false;
+    let isShareModalOpen = false;
 
     onMount(() => {
         const handleSessionExpired = () => {
@@ -106,6 +108,21 @@
             toastStore.error(err instanceof Error ? err.message : "Error al respaldar en la nube.");
         }
     }
+
+    function handleShareClick() {
+        const currentSong = get(activeSongStore);
+        let cloudId = currentSong?.cloud_id;
+        if (!cloudId && currentSong && currentSong.id > 0) {
+            cloudId = syncStore.getCloudIdForSong(currentSong.id);
+        }
+
+        if (!cloudId || String(cloudId).trim() === "" || String(cloudId) === "0") {
+            toastStore.warning("Debes respaldar el proyecto en la nube antes de invitar colaboradores");
+            return;
+        }
+
+        isShareModalOpen = true;
+    }
 </script>
 
 <div class="panel-header control-bar">
@@ -141,9 +158,22 @@
                 ☁️ Respaldar Nube
             {/if}
         </button>
+
+        <button
+            class="share-btn"
+            on:click={handleShareClick}
+            title="Compartir proyecto con colaboradores (Issue #15)"
+        >
+            👥 Compartir
+        </button>
     </div>
 
     <AuthModal bind:isOpen={isAuthModalOpen} />
+    <ShareProjectModal
+        bind:isOpen={isShareModalOpen}
+        cloudId={$activeSongStore?.cloud_id || ($song?.id ? syncStore.getCloudIdForSong($song.id) : "") || ""}
+        projectTitle={$song?.title || "Proyecto"}
+    />
 </div>
 
 <style>
@@ -361,5 +391,46 @@
     .cloud-btn:disabled {
         opacity: 0.5;
         cursor: not-allowed;
+    }
+
+    .share-btn {
+        position: relative;
+        background: radial-gradient(
+            circle at 50% 0,
+            rgba(0, 200, 255, 0.35) 0,
+            var(--lcd-button-bg) 60%
+        );
+        color: #70d6ff;
+        text-shadow:
+            0 0 3px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow-soft);
+        border: 1px solid #70d6ff;
+        padding: 4px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        box-shadow:
+            0 0 0 1px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow-soft);
+        font-family: var(--lcd-font-ui);
+        font-size: 0.9rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        transition: all 0.15s ease;
+    }
+
+    .share-btn:hover {
+        background: radial-gradient(
+            circle at 50% 0,
+            rgba(0, 200, 255, 0.55) 0,
+            var(--lcd-button-bg-soft) 65%
+        );
+        box-shadow: 0 0 8px rgba(0, 200, 255, 0.45);
+        transform: translateY(-1px);
+        filter: brightness(1.05);
+    }
+
+    .share-btn:active {
+        transform: translateY(1px);
     }
 </style>
