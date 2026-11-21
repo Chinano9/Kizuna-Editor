@@ -1,8 +1,8 @@
 /*
-    Kizuna Editor - Cloud Sync API Service (Issue #13, #14)
-    Handles project push/pull communication with Kizuna Cloud.
+    Kizuna Editor - Cloud Sync API Service (Issue #13, #14, #16, #22)
+    Handles project push/pull communication and collaborative checkout locks with Kizuna Cloud.
 */
-import type { CloudPushPayload, CloudPushResult } from "../types/sync.ts";
+import type { CloudPushPayload, CloudPushResult, CloudProject, ProjectLock } from "../types/sync.ts";
 import { authStorage, DEFAULT_CLOUD_URL, AuthApiError } from "./authApi.ts";
 import type { ApiResponse } from "../types/auth.ts";
 
@@ -181,6 +181,177 @@ export const syncApi = {
 
         if (!body.data) {
             throw new AuthApiError("Server returned empty project data", response.status);
+        }
+
+        return body.data;
+    },
+
+    /**
+     * Request an exclusive checkout lease on a cloud project (Issue #16)
+     */
+    async checkoutProject(
+        projectId: number,
+        token: string,
+        customBaseUrl?: string
+    ): Promise<ProjectLock> {
+        if (!token) {
+            throw new AuthApiError("Authentication token is required to checkout project", 401);
+        }
+        if (projectId <= 0) {
+            throw new AuthApiError("Invalid project ID for checkout", 400);
+        }
+
+        const baseUrl = customBaseUrl || authStorage.getCloudUrl() || DEFAULT_CLOUD_URL;
+        const url = `${baseUrl.replace(/\/+$/, "")}/api/v1/projects/${projectId}/checkout`;
+
+        let response: Response;
+        try {
+            response = await fetch(url, {
+                method: "POST",
+                headers: {
+                    Accept: "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+            });
+        } catch (networkError) {
+            throw new AuthApiError(
+                `Unable to connect to Kizuna Cloud at ${baseUrl}. Ensure the server is online.`,
+                0,
+                networkError instanceof Error ? networkError.message : String(networkError)
+            );
+        }
+
+        let body: ApiResponse<ProjectLock>;
+        try {
+            body = (await response.json()) as ApiResponse<ProjectLock>;
+        } catch {
+            throw new AuthApiError(
+                `Invalid server response (${response.status} ${response.statusText})`,
+                response.status
+            );
+        }
+
+        if (!response.ok || !body.success) {
+            checkAuthExpired(response.status);
+            const errorItem = body.error;
+            const message = errorItem?.message || `Checkout lock rejected (HTTP ${response.status})`;
+            throw new AuthApiError(message, response.status, errorItem?.details);
+        }
+
+        if (!body.data) {
+            throw new AuthApiError("Server returned empty lock data", response.status);
+        }
+
+        return body.data;
+    },
+
+    /**
+     * Release an active checkout lease on a cloud project (Issue #22)
+     */
+    async releaseProject(
+        projectId: number,
+        token: string,
+        customBaseUrl?: string
+    ): Promise<void> {
+        if (!token) {
+            throw new AuthApiError("Authentication token is required to release project lock", 401);
+        }
+        if (projectId <= 0) {
+            throw new AuthApiError("Invalid project ID for lock release", 400);
+        }
+
+        const baseUrl = customBaseUrl || authStorage.getCloudUrl() || DEFAULT_CLOUD_URL;
+        const url = `${baseUrl.replace(/\/+$/, "")}/api/v1/projects/${projectId}/release`;
+
+        let response: Response;
+        try {
+            response = await fetch(url, {
+                method: "POST",
+                headers: {
+                    Accept: "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+            });
+        } catch (networkError) {
+            throw new AuthApiError(
+                `Unable to connect to Kizuna Cloud at ${baseUrl}. Ensure the server is online.`,
+                0,
+                networkError instanceof Error ? networkError.message : String(networkError)
+            );
+        }
+
+        let body: ApiResponse<{ message?: string }>;
+        try {
+            body = (await response.json()) as ApiResponse<{ message?: string }>;
+        } catch {
+            throw new AuthApiError(
+                `Invalid server response (${response.status} ${response.statusText})`,
+                response.status
+            );
+        }
+
+        if (!response.ok || !body.success) {
+            checkAuthExpired(response.status);
+            const errorItem = body.error;
+            const message = errorItem?.message || `Failed to release project lock (HTTP ${response.status})`;
+            throw new AuthApiError(message, response.status, errorItem?.details);
+        }
+    },
+
+    /**
+     * Query project details including active checkout lock status (Issue #16)
+     */
+    async getProjectDetails(
+        projectId: number,
+        token: string,
+        customBaseUrl?: string
+    ): Promise<CloudProject> {
+        if (!token) {
+            throw new AuthApiError("Authentication token is required to inspect project status", 401);
+        }
+        if (projectId <= 0) {
+            throw new AuthApiError("Invalid project ID", 400);
+        }
+
+        const baseUrl = customBaseUrl || authStorage.getCloudUrl() || DEFAULT_CLOUD_URL;
+        const url = `${baseUrl.replace(/\/+$/, "")}/api/v1/projects/${projectId}`;
+
+        let response: Response;
+        try {
+            response = await fetch(url, {
+                method: "GET",
+                headers: {
+                    Accept: "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+            });
+        } catch (networkError) {
+            throw new AuthApiError(
+                `Unable to connect to Kizuna Cloud at ${baseUrl}. Ensure the server is online.`,
+                0,
+                networkError instanceof Error ? networkError.message : String(networkError)
+            );
+        }
+
+        let body: ApiResponse<CloudProject>;
+        try {
+            body = (await response.json()) as ApiResponse<CloudProject>;
+        } catch {
+            throw new AuthApiError(
+                `Invalid server response (${response.status} ${response.statusText})`,
+                response.status
+            );
+        }
+
+        if (!response.ok || !body.success) {
+            checkAuthExpired(response.status);
+            const errorItem = body.error;
+            const message = errorItem?.message || `Failed to get project details (HTTP ${response.status})`;
+            throw new AuthApiError(message, response.status, errorItem?.details);
+        }
+
+        if (!body.data) {
+            throw new AuthApiError("Server returned empty project details", response.status);
         }
 
         return body.data;

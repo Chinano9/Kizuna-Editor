@@ -1,27 +1,91 @@
 <script lang="ts">
+    import { onDestroy } from "svelte";
+    import { get } from "svelte/store";
     import { GetSong } from "../../wailsjs/go/main/App";
 
-    import Toolbar from "@/components/Toolbar.svelte";
     import Editor from "@/components/Editor.svelte";
     import ScoreViewer from "@/components/ScoreViewer.svelte";
     import TrackTabs from "@/components/TrackTabs.svelte";
     import Workbar from "@/components/Workbar.svelte";
+    import AlbumSelector from "@/features/albums/components/AlbumSelector.svelte";
 
-    import { songId, song, activeSongStore } from "@/stores/projectStore";
+    import { songId, song, activeSongStore, autoSaveStore } from "@/stores/projectStore";
     import { currentView } from "@/stores/viewStore";
     import { activeTrackIndex } from "@/stores/trackStore";
+    import { audioPlayerStore } from "@/features/audio-deck/stores/audioPlayerStore";
+    import { syncStore } from "@/features/cloud-sync/stores/syncStore";
     import { toastStore } from "@shared/stores/toastStore";
-    import { Track, Song } from "@shared/types/wails";
+    import { Track } from "@shared/types/wails";
 
     let activeTrack: Track | null = null;
+    let distractionFree = false;
 
     // --- Reactive Data Loading ---
     $: {
         loadSong($songId);
     }
 
+    async function inspectCloudLockIfSynced(localId: number) {
+        const cloudId = syncStore.getCloudIdForSong(localId);
+        if (!cloudId || cloudId <= 0) {
+            syncStore.resetLockState();
+            return;
+        }
+
+        activeSongStore.setCloudId(cloudId);
+
+        const state = get(syncStore);
+        if (!state.isAuthenticated) {
+            syncStore.resetLockState();
+            return;
+        }
+
+        try {
+            const status = await syncStore.verifyProjectLock(cloudId);
+            if (status.isLockedByOther) {
+                toastStore.warning(
+                    `🔒 Proyecto bloqueado por ${status.lockedBy || "otro colaborador"}. Modo solo lectura.`
+                );
+            } else if (status.isOffline) {
+                toastStore.info(
+                    "⚡ Sin conexión a Kizuna Cloud: Modo Local-First activado (puedes editar y guardar localmente)."
+                );
+            }
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn("Could not verify cloud checkout lock:", msg);
+        }
+    }
+
+    async function releaseActiveCheckoutOnExit() {
+        const state = get(syncStore);
+        if (!state.hasActiveCheckout || !state.isAuthenticated) {
+            syncStore.resetLockState();
+            return;
+        }
+
+        const currentSong = get(activeSongStore);
+        const cloudId =
+            Number(currentSong?.cloud_id) ||
+            (currentSong?.id ? syncStore.getCloudIdForSong(currentSong.id) : 0) ||
+            state.activeLock?.project_id ||
+            0;
+
+        if (cloudId > 0) {
+            try {
+                await syncStore.releaseProjectLock(cloudId);
+            } catch (err) {
+                console.warn("Failed to auto-release checkout lock on exit:", err);
+                syncStore.resetLockState();
+            }
+        } else {
+            syncStore.resetLockState();
+        }
+    }
+
     async function loadSong(id: number) {
         if (id === 0) {
+            syncStore.resetLockState();
             // If the store is not already initialized, create default structure
             if (!$song || !$song.tracks || $song.tracks.length === 0) {
                 activeSongStore.createNewSong();
@@ -30,12 +94,16 @@
             return;
         }
 
+        if ($song && $song.id === id && $song.tracks && $song.tracks.length > 0) {
+            return;
+        }
+
         try {
-            console.log("Loading full content for ID:", id);
             const songData = await GetSong(id);
             if (songData) {
                 song.set(songData);
                 activeTrackIndex.set(0);
+                await inspectCloudLockIfSynced(id);
             }
         } catch (err) {
             console.error("Error fetching song:", err);
@@ -43,8 +111,7 @@
         }
     }
 
-    // This reactive block now simply keeps `activeTrack` in sync.
-    // The actual data binding will happen inside the Editor component.
+    // Keep `activeTrack` in sync with activeSongStore and activeTrackIndex
     $: {
         if ($song && $song.tracks) {
             activeTrack = $song.tracks[$activeTrackIndex] ?? null;
@@ -53,29 +120,62 @@
         }
     }
 
-    function goBack() {
+    function handleSeekFromScore(event: CustomEvent<number>) {
+        audioPlayerStore.requestSeek(event.detail);
+    }
+
+    function handleTogglePlayFromScore() {
+        audioPlayerStore.requestTogglePlay();
+    }
+
+    async function goBack() {
+        await releaseActiveCheckoutOnExit();
+        await autoSaveStore.flushIfPending();
+        audioPlayerStore.reset();
         currentView.set("dashboard");
     }
+
+    onDestroy(() => {
+        void releaseActiveCheckoutOnExit();
+        void autoSaveStore.flushIfPending();
+        audioPlayerStore.reset();
+    });
 </script>
 
 <div class="layout-wrapper">
-    <div class="top-nav">
-        <button class="back-btn" on:click={goBack}>← Back to Library</button>
-        <div class="spacer" />
-    </div>
+    {#if !distractionFree}
+        <div class="top-nav">
+            <button class="back-btn" on:click={goBack}>← Back to Library</button>
+            <div class="spacer" />
+        </div>
 
-    <TrackTabs />
+        <TrackTabs />
+    {/if}
+
     <div class="editor-workspace">
         {#if activeTrack}
-            <Editor bind:track={activeTrack} />
-            <ScoreViewer track={activeTrack} />
+            <Editor
+                bind:track={activeTrack}
+                bind:distractionFree
+            />
+            <ScoreViewer
+                track={activeTrack}
+                isPlaying={$audioPlayerStore.isPlaying}
+                playbackPosition={$audioPlayerStore.positionSeconds}
+                playbackDuration={$audioPlayerStore.durationSeconds}
+                on:seek={handleSeekFromScore}
+                on:togglePlay={handleTogglePlayFromScore}
+            />
         {:else}
             <div class="placeholder">Select a track to start editing.</div>
         {/if}
     </div>
 
     {#if activeTrack}
-        <Workbar songID={$songId} activeTrack={activeTrack} />
+        <Workbar
+            songID={$songId}
+            activeTrack={activeTrack}
+        />
     {/if}
 </div>
 
@@ -86,14 +186,19 @@
         height: 100%;
         width: 100%;
     }
-
+    
     .top-nav {
-        height: 30px;
+        min-height: 46px;
         background-color: #181818;
         border-bottom: 1px solid #333;
         display: flex;
         align-items: center;
-        padding: 0 10px;
+        gap: 12px;
+        padding: 0 14px;
+    }
+
+    .spacer {
+        flex: 1;
     }
 
     .back-btn {

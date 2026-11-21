@@ -3,6 +3,7 @@
 
     export let isRecording: boolean = false;
     export let isPlaying: boolean = false;
+    export let isLocked: boolean = false;
     export let hasSelectedTake: boolean = false;
 
     const dispatch = createEventDispatcher<{
@@ -38,8 +39,13 @@
             <button
                 class="record-btn"
                 class:recording={isRecording}
+                disabled={isLocked && !isRecording}
                 on:click={onRecordClick}
-                title={isRecording ? "Stop Recording" : "Start Recording"}
+                title={isLocked
+                    ? "Recording Disabled (Project Locked by Collaborator)"
+                    : isRecording
+                    ? "Stop Recording"
+                    : "Start Recording"}
                 aria-label={isRecording ? "Stop Recording" : "Start Recording"}
             >
                 <div class="btn-rim">

@@ -7,6 +7,8 @@ import (
 	"kizuna/client/internal/database/migrator"
 	"kizuna/client/internal/repository"
 	"kizuna/shared/models"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -31,7 +33,7 @@ func setupTestServices(t *testing.T) (*sql.DB, *SongService, *TrackService, *Alb
 	audioRepo := repository.NewAudioRepository(db)
 
 	songService := NewSongService(db, songRepo, trackRepo)
-	trackService := NewTrackService(trackRepo)
+	trackService := NewTrackService(trackRepo, audioRepo)
 	albumService := NewAlbumService(albumRepo, songRepo)
 	audioService := NewAudioService(audioRepo)
 
@@ -101,6 +103,19 @@ func TestSongService_SaveQuickIdeaAndSaveSong(t *testing.T) {
 	if len(updatedSong.Tracks) != 1 {
 		t.Errorf("expected 1 track after deletion, got %d", len(updatedSong.Tracks))
 	}
+
+	// 5. Issue #21: Re-saving the exact same song content preserves ContentHash (no false-positive diff)
+	hashBeforeNoOpSave := updatedSong.ContentHash
+	if len(hashBeforeNoOpSave) != 16 {
+		t.Fatalf("expected 16-char ContentHash on saved song, got %q", hashBeforeNoOpSave)
+	}
+	reSavedSong, err := songService.SaveSong(ctx, updatedSong)
+	if err != nil {
+		t.Fatalf("failed to re-save song: %v", err)
+	}
+	if reSavedSong.ContentHash != hashBeforeNoOpSave {
+		t.Errorf("expected ContentHash to remain identical on no-op save: before=%q, after=%q", hashBeforeNoOpSave, reSavedSong.ContentHash)
+	}
 }
 
 func TestTrackService(t *testing.T) {
@@ -145,6 +160,82 @@ func TestTrackService(t *testing.T) {
 	// Delete track
 	if err := trackService.DeleteTrack(ctx, newTrack.ID); err != nil {
 		t.Fatalf("failed to delete track: %v", err)
+	}
+}
+
+func TestTrackService_MultiTrackAndPhysicalWavDeletion(t *testing.T) {
+	db, songService, trackService, _, audioService := setupTestServices(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	sID, err := songService.SaveQuickIdea(ctx, 0, "Estructura Completa", "")
+	if err != nil {
+		t.Fatalf("failed to create song: %v", err)
+	}
+
+	// Add multiple tracks and rename them individually ('Guitarra 1', 'Bajo')
+	guitarTrack, err := trackService.AddTrack(ctx, int(sID), "Track 1")
+	if err != nil {
+		t.Fatalf("failed to add first track: %v", err)
+	}
+	bassTrack, err := trackService.AddTrack(ctx, int(sID), "Track 2")
+	if err != nil {
+		t.Fatalf("failed to add second track: %v", err)
+	}
+
+	guitarTrack.Name = "Guitarra 1"
+	if err := trackService.UpdateTrack(ctx, guitarTrack); err != nil {
+		t.Fatalf("failed to rename Guitarra 1: %v", err)
+	}
+
+	bassTrack.Name = "Bajo"
+	bassTrack.InstrumentID = models.InstrumentBassID
+	if err := trackService.UpdateTrack(ctx, bassTrack); err != nil {
+		t.Fatalf("failed to rename Bajo: %v", err)
+	}
+
+	// Create physical .wav files on local disk for both tracks
+	guitarWav := filepath.Join(tmpDir, "guitarra_1_take1.wav")
+	bassWav := filepath.Join(tmpDir, "bajo_take1.wav")
+	audioTrackWav := filepath.Join(tmpDir, "vocal_audio_track.wav")
+
+	for _, wavPath := range []string{guitarWav, bassWav, audioTrackWav} {
+		if err := os.WriteFile(wavPath, []byte("RIFF....WAVEfmt "), 0o644); err != nil {
+			t.Fatalf("failed to create test wav %s: %v", wavPath, err)
+		}
+	}
+
+	if _, err := audioService.RegisterAudioVersion(ctx, int(sID), &guitarTrack.ID, "Guitar Take 1", guitarWav, ""); err != nil {
+		t.Fatalf("failed to register guitar wav: %v", err)
+	}
+	if _, err := audioService.RegisterAudioVersion(ctx, int(sID), &bassTrack.ID, "Bass Take 1", bassWav, ""); err != nil {
+		t.Fatalf("failed to register bass wav: %v", err)
+	}
+
+	audioTrack, err := trackService.AddAudioTrack(ctx, int(sID), "Voz Guía", audioTrackWav)
+	if err != nil {
+		t.Fatalf("failed to add audio track: %v", err)
+	}
+
+	// Deleting 'Guitarra 1' must delete guitarWav from disk while preserving bassWav
+	if err := trackService.DeleteTrack(ctx, guitarTrack.ID); err != nil {
+		t.Fatalf("failed to delete Guitarra 1: %v", err)
+	}
+	if _, err := os.Stat(guitarWav); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be physically deleted from disk after DeleteTrack, got err=%v", guitarWav, err)
+	}
+	if _, err := os.Stat(bassWav); err != nil {
+		t.Errorf("expected %s to remain on disk for Bajo track, got err=%v", bassWav, err)
+	}
+
+	// Deleting audioTrack ('Voz Guía') must also delete its physical .wav file referenced in data_content
+	if err := trackService.DeleteTrack(ctx, audioTrack.ID); err != nil {
+		t.Fatalf("failed to delete Voz Guía audio track: %v", err)
+	}
+	if _, err := os.Stat(audioTrackWav); !os.IsNotExist(err) {
+		t.Errorf("expected %s to be physically deleted from disk after deleting audio track, got err=%v", audioTrackWav, err)
 	}
 }
 

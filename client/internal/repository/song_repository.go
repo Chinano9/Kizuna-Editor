@@ -31,6 +31,7 @@ type SongRepository interface {
 	GetByID(ctx context.Context, id int) (*models.Song, error)
 	GetRecent(ctx context.Context, limit int) ([]models.Song, error)
 	GetByAlbumID(ctx context.Context, albumID int) ([]models.Song, error)
+	ReorderAlbumSongs(ctx context.Context, albumID int, songIDs []int) error
 	Update(ctx context.Context, tx *sql.Tx, song *models.Song) error
 	UpdateTitle(ctx context.Context, tx *sql.Tx, id int, title string) error
 	Delete(ctx context.Context, id int) error
@@ -113,16 +114,79 @@ func (r *SQLiteSongRepository) GetByID(ctx context.Context, id int) (*models.Son
 		s.KeySignature = ""
 	}
 
+	r.populateContentHash(ctx, &s)
+
 	return &s, nil
 }
 
-// GetRecent returns the most recently updated songs up to the requested limit.
+// populateContentHash computes the deterministic SHA-256 content hash for a song from SQLite tracks and audio versions.
+func (r *SQLiteSongRepository) populateContentHash(ctx context.Context, s *models.Song) {
+	if s == nil || s.ID <= 0 {
+		return
+	}
+
+	tracks := make([]models.Track, 0)
+	trackRows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id, song_id, instrument_id, name, data_content, display_mode, is_muted, created_at
+		 FROM tracks WHERE song_id = ? ORDER BY id ASC`,
+		s.ID,
+	)
+	if err == nil {
+		for trackRows.Next() {
+			var t models.Track
+			if err := trackRows.Scan(
+				&t.ID, &t.SongID, &t.InstrumentID, &t.Name, &t.DataContent, &t.DisplayMode, &t.IsMuted, &t.CreatedAt,
+			); err == nil {
+				tracks = append(tracks, t)
+			}
+		}
+		_ = trackRows.Close()
+	}
+
+	takes := make([]models.AudioVersion, 0)
+	audioRows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id, song_id, track_id, version_name, file_path, notes, created_at
+		 FROM audio_versions WHERE song_id = ? ORDER BY created_at DESC`,
+		s.ID,
+	)
+	if err == nil {
+		for audioRows.Next() {
+			var av models.AudioVersion
+			var trackIDNull sql.NullInt64
+			if err := audioRows.Scan(
+				&av.ID, &av.SongID, &trackIDNull, &av.VersionName, &av.FilePath, &av.Notes, &av.CreatedAt,
+			); err == nil {
+				if trackIDNull.Valid {
+					val := int(trackIDNull.Int64)
+					av.TrackID = &val
+				}
+				takes = append(takes, av)
+			}
+		}
+		_ = audioRows.Close()
+	}
+
+	s.ContentHash = models.ComputeProjectHash(
+		s.Title,
+		s.BPM,
+		s.TimeSignature,
+		s.KeySignature,
+		tracks,
+		takes,
+	)
+}
+
+// GetRecent returns the most recently updated songs up to the requested limit, including their computed ContentHash.
 func (r *SQLiteSongRepository) GetRecent(ctx context.Context, limit int) ([]models.Song, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	query := `SELECT id, title, updated_at FROM songs ORDER BY updated_at DESC LIMIT ?`
+	query := `
+		SELECT id, album_id, title, bpm, time_signature, key_signature, created_at, updated_at
+		FROM songs ORDER BY updated_at DESC LIMIT ?`
 	rows, err := r.db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query recent songs: %w", err)
@@ -132,11 +196,27 @@ func (r *SQLiteSongRepository) GetRecent(ctx context.Context, limit int) ([]mode
 	songs := make([]models.Song, 0)
 	for rows.Next() {
 		var s models.Song
-		if err := rows.Scan(&s.ID, &s.Title, &s.UpdatedAt); err != nil {
+		var ts, ks sql.NullString
+		if err := rows.Scan(
+			&s.ID, &s.AlbumID, &s.Title, &s.BPM, &ts, &ks, &s.CreatedAt, &s.UpdatedAt,
+		); err != nil {
 			continue
+		}
+		if ts.Valid {
+			s.TimeSignature = ts.String
+		} else {
+			s.TimeSignature = "4/4"
+		}
+		if ks.Valid {
+			s.KeySignature = ks.String
 		}
 		songs = append(songs, s)
 	}
+
+	for i := range songs {
+		r.populateContentHash(ctx, &songs[i])
+	}
+
 	return songs, nil
 }
 
@@ -144,7 +224,7 @@ func (r *SQLiteSongRepository) GetRecent(ctx context.Context, limit int) ([]mode
 func (r *SQLiteSongRepository) GetByAlbumID(ctx context.Context, albumID int) ([]models.Song, error) {
 	query := `
 		SELECT id, album_id, title, bpm, time_signature, key_signature, created_at, updated_at
-		FROM songs WHERE album_id = ? ORDER BY title ASC`
+		FROM songs WHERE album_id = ? ORDER BY album_position IS NULL, album_position ASC, title ASC, id ASC`
 
 	rows, err := r.db.QueryContext(ctx, query, albumID)
 	if err != nil {
@@ -157,7 +237,7 @@ func (r *SQLiteSongRepository) GetByAlbumID(ctx context.Context, albumID int) ([
 		var s models.Song
 		var ts, ks sql.NullString
 		if err := rows.Scan(&s.ID, &s.AlbumID, &s.Title, &s.BPM, &ts, &ks, &s.CreatedAt, &s.UpdatedAt); err != nil {
-			continue
+			return nil, fmt.Errorf("scan album song: %w", err)
 		}
 		if ts.Valid {
 			s.TimeSignature = ts.String
@@ -167,7 +247,7 @@ func (r *SQLiteSongRepository) GetByAlbumID(ctx context.Context, albumID int) ([
 		}
 		songs = append(songs, s)
 	}
-	return songs, nil
+	return songs, rows.Err()
 }
 
 // Update updates an existing song's metadata, optionally inside an existing transaction.
@@ -178,6 +258,7 @@ func (r *SQLiteSongRepository) Update(ctx context.Context, tx *sql.Tx, song *mod
 
 	query := `
 		UPDATE songs SET
+			album_position = CASE WHEN album_id IS ? THEN album_position ELSE NULL END,
 			album_id = ?,
 			title = ?,
 			bpm = ?,
@@ -188,9 +269,9 @@ func (r *SQLiteSongRepository) Update(ctx context.Context, tx *sql.Tx, song *mod
 
 	var err error
 	if tx != nil {
-		_, err = tx.ExecContext(ctx, query, song.AlbumID, song.Title, song.BPM, song.TimeSignature, song.KeySignature, song.ID)
+		_, err = tx.ExecContext(ctx, query, song.AlbumID, song.AlbumID, song.Title, song.BPM, song.TimeSignature, song.KeySignature, song.ID)
 	} else {
-		_, err = r.db.ExecContext(ctx, query, song.AlbumID, song.Title, song.BPM, song.TimeSignature, song.KeySignature, song.ID)
+		_, err = r.db.ExecContext(ctx, query, song.AlbumID, song.AlbumID, song.Title, song.BPM, song.TimeSignature, song.KeySignature, song.ID)
 	}
 
 	if err != nil {
@@ -225,10 +306,51 @@ func (r *SQLiteSongRepository) Delete(ctx context.Context, id int) error {
 
 // SetAlbum assigns or removes a song from an album.
 func (r *SQLiteSongRepository) SetAlbum(ctx context.Context, songID int, albumID *int) error {
-	query := "UPDATE songs SET album_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-	_, err := r.db.ExecContext(ctx, query, albumID, songID)
+	query := "UPDATE songs SET album_position = CASE WHEN album_id IS ? THEN album_position ELSE NULL END, album_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+	_, err := r.db.ExecContext(ctx, query, albumID, albumID, songID)
 	if err != nil {
 		return fmt.Errorf("set album for song %d: %w", songID, err)
 	}
 	return nil
+}
+
+// ReorderAlbumSongs stores the complete order atomically without modifying project content.
+func (r *SQLiteSongRepository) ReorderAlbumSongs(ctx context.Context, albumID int, songIDs []int) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM albums WHERE id = ?", albumID).Scan(&count); err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("album %d not found", albumID)
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM songs WHERE album_id = ?", albumID).Scan(&count); err != nil {
+		return err
+	}
+	if count != len(songIDs) {
+		return fmt.Errorf("album membership changed; reload the album")
+	}
+	seen := make(map[int]bool, len(songIDs))
+	for i, id := range songIDs {
+		if seen[id] {
+			return fmt.Errorf("duplicate song %d", id)
+		}
+		seen[id] = true
+		result, err := tx.ExecContext(ctx, "UPDATE songs SET album_position = ? WHERE id = ? AND album_id = ?", i+1, id, albumID)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return fmt.Errorf("song %d does not belong to album %d", id, albumID)
+		}
+	}
+	return tx.Commit()
 }

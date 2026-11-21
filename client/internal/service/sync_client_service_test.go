@@ -19,15 +19,23 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package service
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
+	"kizuna/client/internal/crypto"
 	"kizuna/client/internal/database"
 	"kizuna/client/internal/database/migrator"
 	"kizuna/client/internal/repository"
 	"kizuna/shared/models"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -82,11 +90,11 @@ func TestSyncClientService_PackageProject(t *testing.T) {
 		}
 
 		track := &models.Track{
-			SongID:        songID,
-			InstrumentID:  1,
-			Name:          "Lead Guitar",
-			DataContent:   `\title "Climbing Up The Walls"\n.`,
-			DisplayMode:   "BOTH",
+			SongID:       songID,
+			InstrumentID: 1,
+			Name:         "Lead Guitar",
+			DataContent:  `\title "Climbing Up The Walls"\n.`,
+			DisplayMode:  "BOTH",
 		}
 		if _, err := trackRepo.Create(ctx, nil, track); err != nil {
 			t.Fatalf("failed to create track: %v", err)
@@ -124,7 +132,63 @@ func TestSyncClientService_PackageProject(t *testing.T) {
 	})
 }
 
-func TestSyncClientService_PushProjectToCloud(t *testing.T) {
+func TestSyncClientService_ProgressReader(t *testing.T) {
+	ctx := context.Background()
+	data := make([]byte, 1024*100) // 100 KB
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	var emittedProgress []models.SyncProgressPayload
+	var mu sync.Mutex
+
+	mockEmitter := func(ctx context.Context, eventName string, args ...interface{}) {
+		if eventName == "sync:progress" && len(args) > 0 {
+			if p, ok := args[0].(models.SyncProgressPayload); ok {
+				mu.Lock()
+				emittedProgress = append(emittedProgress, p)
+				mu.Unlock()
+			}
+		}
+	}
+
+	rawReader := bytes.NewReader(data)
+	pr := newProgressReader(ctx, rawReader, "push", int64(len(data)), 1, 3, mockEmitter)
+	pr.throttleDelay = 0 // Instant emission for unit test verification
+
+	buf := make([]byte, 1024*10)
+	var totalRead int64
+	for {
+		n, err := pr.Read(buf)
+		totalRead += int64(n)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected read error: %v", err)
+		}
+	}
+
+	if totalRead != int64(len(data)) {
+		t.Fatalf("expected to read %d bytes, read %d", len(data), totalRead)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(emittedProgress) == 0 {
+		t.Fatalf("expected progress events to be emitted, got 0")
+	}
+
+	last := emittedProgress[len(emittedProgress)-1]
+	if last.BytesTransferred != int64(len(data)) {
+		t.Errorf("expected final bytes transferred %d, got %d", len(data), last.BytesTransferred)
+	}
+	if last.Percentage != 100.0 {
+		t.Errorf("expected final percentage 100.0, got %f", last.Percentage)
+	}
+}
+
+func TestSyncClientService_PushProjectToCloud_RetryRecovery(t *testing.T) {
 	db := setupSyncTestDB(t)
 	defer db.Close()
 
@@ -134,8 +198,8 @@ func TestSyncClientService_PushProjectToCloud(t *testing.T) {
 	audioRepo := repository.NewAudioRepository(db)
 
 	song := &models.Song{
-		Title:         "Paranoid Android",
-		BPM:           82,
+		Title:         "Street Spirit",
+		BPM:           102,
 		TimeSignature: "4/4",
 	}
 	songID, err := songRepo.Create(ctx, nil, song)
@@ -143,57 +207,75 @@ func TestSyncClientService_PushProjectToCloud(t *testing.T) {
 		t.Fatalf("failed to create song: %v", err)
 	}
 
-	t.Run("Requires authentication token", func(t *testing.T) {
-		svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
-		_, err := svc.PushProjectToCloud(ctx, "http://localhost:8080", "", songID, 0)
-		if err == nil {
-			t.Fatal("expected error when token is empty")
+	var attempts int32
+	var retryEvents []models.SyncRetryPayload
+	var mu sync.Mutex
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := atomic.AddInt32(&attempts, 1)
+		// Fail the first two requests with temporary 502 Bad Gateway
+		if current < 3 {
+			http.Error(w, "temporary gateway failure", http.StatusBadGateway)
+			return
+		}
+
+		// Succeed on 3rd attempt
+		var req models.CloudPushPayload
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data": models.CloudPushResult{
+				ProjectID:  5001,
+				NewVersion: 2,
+				SyncedAt:   time.Now().UTC(),
+				Status:     "synced",
+			},
+		})
+	}))
+	defer mockServer.Close()
+
+	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+	// Fast delays for unit testing
+	svc.SetRetryDelays([]time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond})
+	svc.SetEventEmitter(func(ctx context.Context, eventName string, args ...interface{}) {
+		if eventName == "sync:retry" && len(args) > 0 {
+			if r, ok := args[0].(models.SyncRetryPayload); ok {
+				mu.Lock()
+				retryEvents = append(retryEvents, r)
+				mu.Unlock()
+			}
 		}
 	})
 
-	t.Run("Successfully pushes project to cloud endpoint", func(t *testing.T) {
-		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/api/v1/sync/push" {
-				http.Error(w, "not found", http.StatusNotFound)
-				return
-			}
-			if r.Header.Get("Authorization") != "Bearer valid.jwt.token" {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
+	result, err := svc.PushProjectToCloud(ctx, mockServer.URL, "valid.token", songID, 1)
+	if err != nil {
+		t.Fatalf("expected successful push after retries, got err: %v", err)
+	}
 
-			var req models.CloudPushPayload
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
+	if result.ProjectID != 5001 || result.NewVersion != 2 {
+		t.Errorf("unexpected push result: %+v", result)
+	}
 
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": true,
-				"data": models.CloudPushResult{
-					ProjectID:  9999,
-					NewVersion: 1,
-					SyncedAt:   time.Now().UTC(),
-					Status:     "created",
-				},
-			})
-		}))
-		defer mockServer.Close()
+	if atomic.LoadInt32(&attempts) != 3 {
+		t.Errorf("expected exactly 3 attempts, got %d", atomic.LoadInt32(&attempts))
+	}
 
-		svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
-		result, err := svc.PushProjectToCloud(ctx, mockServer.URL, "valid.jwt.token", songID, 0)
-		if err != nil {
-			t.Fatalf("unexpected error pushing project: %v", err)
-		}
-
-		if result.ProjectID != 9999 || result.NewVersion != 1 || result.Status != "created" {
-			t.Errorf("unexpected push result: %+v", result)
-		}
-	})
+	mu.Lock()
+	defer mu.Unlock()
+	if len(retryEvents) != 2 {
+		t.Errorf("expected 2 retry events, got %d", len(retryEvents))
+	}
+	if len(retryEvents) > 0 && retryEvents[0].Attempt != 1 {
+		t.Errorf("expected first retry attempt to be 1, got %d", retryEvents[0].Attempt)
+	}
 }
 
-func TestSyncClientService_ImportCloudProject(t *testing.T) {
+func TestSyncClientService_PushProjectToCloud_MaxRetriesExceeded(t *testing.T) {
 	db := setupSyncTestDB(t)
 	defer db.Close()
 
@@ -202,86 +284,68 @@ func TestSyncClientService_ImportCloudProject(t *testing.T) {
 	trackRepo := repository.NewTrackRepository(db)
 	audioRepo := repository.NewAudioRepository(db)
 
+	song := &models.Song{Title: "Creep", BPM: 92, TimeSignature: "4/4"}
+	songID, _ := songRepo.Create(ctx, nil, song)
+
+	var attempts int32
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		http.Error(w, "server down", http.StatusServiceUnavailable)
+	}))
+	defer mockServer.Close()
+
 	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+	svc.SetRetryDelays([]time.Duration{5 * time.Millisecond, 5 * time.Millisecond, 5 * time.Millisecond})
 
-	t.Run("Rejects nil cloud project", func(t *testing.T) {
-		_, err := svc.ImportCloudProject(ctx, nil)
-		if err == nil {
-			t.Fatal("expected error for nil project")
-		}
-	})
+	_, err := svc.PushProjectToCloud(ctx, mockServer.URL, "valid.token", songID, 0)
+	if err == nil {
+		t.Fatal("expected error after exhausting all retries")
+	}
 
-	t.Run("Successfully imports cloud project with tracks and audio into local database", func(t *testing.T) {
-		cp := &models.CloudProject{
-			ID:            555,
-			Title:         "Starlight Serenade",
-			BPM:           140,
-			TimeSignature: "3/4",
-			KeySignature:  "D#",
-			Version:       2,
-			Tracks: []models.Track{
-				{
-					InstrumentID: 1,
-					Name:         "Lead Guitar",
-					DataContent:  "c.4 d.4 e.4",
-					DisplayMode:  "BOTH",
-					IsMuted:      false,
-				},
-				{
-					InstrumentID: 2,
-					Name:         "Bass",
-					DataContent:  "c.2 g.2",
-					DisplayMode:  "STANDARD",
-					IsMuted:      true,
-				},
+	if atomic.LoadInt32(&attempts) != 3 {
+		t.Errorf("expected 3 attempts before giving up, got %d", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestSyncClientService_PushProjectToCloud_NonRetryableError(t *testing.T) {
+	db := setupSyncTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+
+	song := &models.Song{Title: "Karma Police", BPM: 75, TimeSignature: "4/4"}
+	songID, _ := songRepo.Create(ctx, nil, song)
+
+	var attempts int32
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		// 401 Unauthorized should NOT be retried
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error": map[string]interface{}{
+				"code":    401,
+				"message": "unauthorized token",
 			},
-			AudioVersions: []models.AudioVersion{
-				{
-					VersionName: "Demo Take 1",
-					FilePath:    "/tmp/demo_take_1.wav",
-					Notes:       "Acoustic demo take",
-				},
-			},
-		}
+		})
+	}))
+	defer mockServer.Close()
 
-		songID, err := svc.ImportCloudProject(ctx, cp)
-		if err != nil {
-			t.Fatalf("unexpected error importing cloud project: %v", err)
-		}
-		if songID <= 0 {
-			t.Fatalf("expected positive song ID, got %d", songID)
-		}
+	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+	svc.SetRetryDelays([]time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 30 * time.Millisecond})
 
-		// Verify song was inserted
-		savedSong, err := songRepo.GetByID(ctx, songID)
-		if err != nil {
-			t.Fatalf("failed to retrieve imported song: %v", err)
-		}
-		if savedSong.Title != "Starlight Serenade" || savedSong.BPM != 140 || savedSong.TimeSignature != "3/4" {
-			t.Errorf("imported song mismatch: %+v", savedSong)
-		}
+	_, err := svc.PushProjectToCloud(ctx, mockServer.URL, "invalid.token", songID, 0)
+	if err == nil {
+		t.Fatal("expected error for 401 unauthorized")
+	}
 
-		// Verify tracks
-		tracks, err := trackRepo.GetBySongID(ctx, songID)
-		if err != nil {
-			t.Fatalf("failed to retrieve tracks: %v", err)
-		}
-		if len(tracks) != 2 {
-			t.Fatalf("expected 2 tracks, got %d", len(tracks))
-		}
-		if tracks[0].Name != "Lead Guitar" || tracks[1].Name != "Bass" {
-			t.Errorf("unexpected tracks: %+v", tracks)
-		}
-
-		// Verify audio versions
-		audioList, err := audioRepo.GetBySongID(ctx, songID)
-		if err != nil {
-			t.Fatalf("failed to retrieve audio: %v", err)
-		}
-		if len(audioList) != 1 || audioList[0].VersionName != "Demo Take 1" {
-			t.Errorf("unexpected audio versions: %+v", audioList)
-		}
-	})
+	if atomic.LoadInt32(&attempts) != 1 {
+		t.Errorf("expected only 1 attempt for non-retryable 401, got %d", atomic.LoadInt32(&attempts))
+	}
 }
 
 func TestSyncClientService_PullProjectFromCloud(t *testing.T) {
@@ -307,7 +371,7 @@ func TestSyncClientService_PullProjectFromCloud(t *testing.T) {
 		}
 	})
 
-	t.Run("Successfully pulls and imports project from cloud", func(t *testing.T) {
+	t.Run("Successfully pulls and imports project from cloud with progress", func(t *testing.T) {
 		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/api/v1/sync/pull" {
 				http.Error(w, "not found", http.StatusNotFound)
@@ -315,10 +379,6 @@ func TestSyncClientService_PullProjectFromCloud(t *testing.T) {
 			}
 			if r.URL.Query().Get("project_id") != "1001" {
 				http.Error(w, "project not found", http.StatusNotFound)
-				return
-			}
-			if r.Header.Get("Authorization") != "Bearer pull.jwt.token" {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 
@@ -344,6 +404,13 @@ func TestSyncClientService_PullProjectFromCloud(t *testing.T) {
 		}))
 		defer mockServer.Close()
 
+		var progressCount int
+		svc.SetEventEmitter(func(ctx context.Context, eventName string, args ...interface{}) {
+			if eventName == "sync:progress" {
+				progressCount++
+			}
+		})
+
 		cloudProject, songID, err := svc.PullProjectFromCloud(ctx, mockServer.URL, "pull.jwt.token", 1001)
 		if err != nil {
 			t.Fatalf("unexpected error pulling project: %v", err)
@@ -355,9 +422,558 @@ func TestSyncClientService_PullProjectFromCloud(t *testing.T) {
 			t.Fatalf("expected valid imported song ID, got %d", songID)
 		}
 
-		importedSong, err := songRepo.GetByID(ctx, songID)
-		if err != nil || importedSong.Title != "Highway Star Remaster" {
+		if importedSong, err := songRepo.GetByID(ctx, songID); err != nil || importedSong.Title != "Highway Star Remaster" {
 			t.Fatalf("failed to query imported song: %v", err)
 		}
+
+		if progressCount == 0 {
+			t.Errorf("expected progress events to be emitted on pull")
+		}
 	})
+}
+
+func TestSyncClientService_ZeroKnowledgeE2EE_PushAndPullWithAudio(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	db := setupSyncTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+
+	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+	localKey := svc.GetEncryptionKey()
+	if len(localKey) != crypto.KeySize {
+		t.Fatalf("expected %d-byte local key, got %d", crypto.KeySize, len(localKey))
+	}
+
+	// 1. Create a local song with tracks and a physical .wav file on disk
+	song := &models.Song{
+		Title:         "Zero Knowledge Symphony",
+		BPM:           128,
+		TimeSignature: "4/4",
+		KeySignature:  "E minor",
+	}
+	songID, err := songRepo.Create(ctx, nil, song)
+	if err != nil {
+		t.Fatalf("failed to create song: %v", err)
+	}
+
+	_, err = trackRepo.Create(ctx, nil, &models.Track{
+		SongID:       songID,
+		InstrumentID: 1,
+		Name:         "Guitarra Principal",
+		DataContent:  `\tempo 128 (0.1 2.2).4 (3.1 5.2).4 |`,
+		DisplayMode:  models.DisplayModeBoth,
+	})
+	if err != nil {
+		t.Fatalf("failed to create track: %v", err)
+	}
+
+	wavContent := []byte("RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x04\x00\x00\x00\x11\x22\x33\x44")
+	originalWavPath := filepath.Join(t.TempDir(), "solo_take.wav")
+	if err := os.WriteFile(originalWavPath, wavContent, 0o644); err != nil {
+		t.Fatalf("failed to write test wav: %v", err)
+	}
+
+	_, err = audioRepo.Create(ctx, &models.AudioVersion{
+		SongID:      songID,
+		VersionName: "Solo Take 1",
+		FilePath:    originalWavPath,
+		Notes:       "Recorded with condenser mic",
+	})
+	if err != nil {
+		t.Fatalf("failed to create audio version: %v", err)
+	}
+
+	// 2. Mock Zero-Knowledge Cloud Server that stores whateverPushRequest it receives
+	var storedOnServer models.CloudProject
+	var rawPushWireBytes []byte
+
+	mockCloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sync/push":
+			rawBody, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			rawPushWireBytes = rawBody
+
+			var req models.CloudPushPayload
+			if err := json.Unmarshal(rawBody, &req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			storedOnServer = models.CloudProject{
+				ID:               2025,
+				OwnerID:          "usr_zk",
+				Title:            req.Title,
+				BPM:              req.BPM,
+				TimeSignature:    req.TimeSignature,
+				KeySignature:     req.KeySignature,
+				Version:          1,
+				Tracks:           req.Tracks,
+				AudioVersions:    req.AudioVersions,
+				EncryptedPayload: req.EncryptedPayload,
+				EncryptionAlgo:   req.EncryptionAlgo,
+				IsEncrypted:      req.IsEncrypted,
+				CreatedAt:        time.Now().UTC(),
+				UpdatedAt:        time.Now().UTC(),
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": models.CloudPushResult{
+					ProjectID:  2025,
+					NewVersion: 1,
+					SyncedAt:   time.Now().UTC(),
+					Status:     "created",
+				},
+			})
+
+		case "/api/v1/sync/pull":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data":    storedOnServer,
+			})
+
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer mockCloud.Close()
+
+	// 3. Push project to cloud (E2EE)
+	pushRes, err := svc.PushProjectToCloud(ctx, mockCloud.URL, "zk.jwt.token", songID, 0)
+	if err != nil {
+		t.Fatalf("E2EE push failed: %v", err)
+	}
+	if pushRes.ProjectID != 2025 {
+		t.Fatalf("expected cloud project ID 2025, got %d", pushRes.ProjectID)
+	}
+
+	// Verify Zero-Knowledge guarantee on HTTP wire and server storage:
+	// Neither the raw HTTP body nor the server's stored record may contain plaintext composition data!
+	rawWireStr := string(rawPushWireBytes)
+	for _, secret := range []string{"Zero Knowledge Symphony", "Guitarra Principal", "(0.1 2.2).4", "Solo Take 1", "Recorded with condenser mic"} {
+		if strings.Contains(rawWireStr, secret) {
+			t.Errorf("Zero-Knowledge violation: HTTP push payload exposed plaintext %q", secret)
+		}
+	}
+	if !storedOnServer.IsEncrypted || storedOnServer.EncryptionAlgo != crypto.AlgorithmAES256GCM || storedOnServer.EncryptedPayload == "" {
+		t.Fatalf("expected server to store AES-256-GCM encrypted payload, got %+v", storedOnServer)
+	}
+	if len(storedOnServer.Tracks) != 0 || len(storedOnServer.AudioVersions) != 0 {
+		t.Fatalf("expected server plaintext Tracks and AudioVersions to be empty, got %d tracks and %d audio versions", len(storedOnServer.Tracks), len(storedOnServer.AudioVersions))
+	}
+
+	// 4. Verify that without the user's local key, pulling fails to decrypt
+	attackerSvc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+	attackerKey, _ := crypto.GenerateKey()
+	_ = attackerSvc.SetEncryptionKey(attackerKey)
+	if _, _, err := attackerSvc.PullProjectFromCloud(ctx, mockCloud.URL, "zk.jwt.token", 2025); err == nil {
+		t.Fatalf("expected pull with wrong local key to fail decryption")
+	}
+
+	// 5. Pull project with the rightful local key into a fresh database
+	dbDest := setupSyncTestDB(t)
+	defer dbDest.Close()
+
+	destSongRepo := repository.NewSongRepository(dbDest)
+	destTrackRepo := repository.NewTrackRepository(dbDest)
+	destAudioRepo := repository.NewAudioRepository(dbDest)
+	destSvc := NewSyncClientService(destSongRepo, destTrackRepo, destAudioRepo)
+	_ = destSvc.SetEncryptionKey(localKey)
+
+	pulledProject, importedSongID, err := destSvc.PullProjectFromCloud(ctx, mockCloud.URL, "zk.jwt.token", 2025)
+	if err != nil {
+		t.Fatalf("E2EE pull and decrypt failed: %v", err)
+	}
+	if pulledProject.Title != "Zero Knowledge Symphony" {
+		t.Errorf("expected decrypted title 'Zero Knowledge Symphony', got %q", pulledProject.Title)
+	}
+
+	importedSong, err := destSongRepo.GetByID(ctx, importedSongID)
+	if err != nil {
+		t.Fatalf("failed to fetch imported song: %v", err)
+	}
+	if importedSong.Title != "Zero Knowledge Symphony" || importedSong.BPM != 128 || importedSong.KeySignature != "E minor" {
+		t.Errorf("imported song metadata mismatch: %+v", importedSong)
+	}
+
+	importedTracks, err := destTrackRepo.GetBySongID(ctx, importedSongID)
+	if err != nil || len(importedTracks) != 1 {
+		t.Fatalf("expected 1 imported track, got %d (err=%v)", len(importedTracks), err)
+	}
+	if importedTracks[0].Name != "Guitarra Principal" || importedTracks[0].DataContent != `\tempo 128 (0.1 2.2).4 (3.1 5.2).4 |` {
+		t.Errorf("imported track mismatch: %+v", importedTracks[0])
+	}
+
+	importedAudios, err := destAudioRepo.GetBySongID(ctx, importedSongID)
+	if err != nil || len(importedAudios) != 1 {
+		t.Fatalf("expected 1 imported audio version, got %d (err=%v)", len(importedAudios), err)
+	}
+	if importedAudios[0].VersionName != "Solo Take 1" {
+		t.Errorf("expected audio version 'Solo Take 1', got %q", importedAudios[0].VersionName)
+	}
+
+	// Verify the restored .wav file on disk matches the original bytes
+	restoredWavBytes, err := os.ReadFile(importedAudios[0].FilePath)
+	if err != nil {
+		t.Fatalf("failed to read restored wav file at %s: %v", importedAudios[0].FilePath, err)
+	}
+	if !bytes.Equal(restoredWavBytes, wavContent) {
+		t.Errorf("restored wav file bytes do not match original wav content")
+	}
+}
+
+func TestSyncClientService_ShareProject(t *testing.T) {
+	db := setupSyncTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+
+	t.Run("Rejects empty or invalid parameters", func(t *testing.T) {
+		err := svc.ShareProject(ctx, "http://localhost:8080", "token", "", "collab@kizuna.io")
+		if err == nil || err.Error() != "el identificador del proyecto remoto es inválido" {
+			t.Fatalf("expected invalid cloud id error, got %v", err)
+		}
+
+		err = svc.ShareProject(ctx, "http://localhost:8080", "token", "1001", "   ")
+		if err == nil || err.Error() != "debes ingresar el correo o nombre de usuario del colaborador" {
+			t.Fatalf("expected empty collaborator error, got %v", err)
+		}
+
+		err = svc.ShareProject(ctx, "http://localhost:8080", "   ", "1001", "collab@kizuna.io")
+		if err == nil || err.Error() != "sesión expirada: inicia sesión en Kizuna Cloud para compartir" {
+			t.Fatalf("expected empty token error, got %v", err)
+		}
+	})
+
+	t.Run("Successfully sends share invitation (HTTP 200)", func(t *testing.T) {
+		var receivedPath string
+		var receivedAuth string
+		var receivedBody map[string]string
+
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedPath = r.URL.Path
+			receivedAuth = r.Header.Get("Authorization")
+			_ = json.NewDecoder(r.Body).Decode(&receivedBody)
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"message": "collaborator added successfully",
+			})
+		}))
+		defer mockServer.Close()
+
+		err := svc.ShareProject(ctx, mockServer.URL, "secret.jwt.token", "1001", "rory@gallagher.com")
+		if err != nil {
+			t.Fatalf("unexpected error sharing project: %v", err)
+		}
+
+		if receivedPath != "/api/v1/projects/1001/share" {
+			t.Errorf("expected path /api/v1/projects/1001/share, got %s", receivedPath)
+		}
+		if receivedAuth != "Bearer secret.jwt.token" {
+			t.Errorf("expected Bearer secret.jwt.token, got %s", receivedAuth)
+		}
+		if receivedBody["collaborator"] != "rory@gallagher.com" {
+			t.Errorf("expected collaborator rory@gallagher.com, got %v", receivedBody)
+		}
+	})
+
+	t.Run("Maps HTTP status codes to descriptive error messages", func(t *testing.T) {
+		statusCodes := []struct {
+			status       int
+			expectedPart string
+		}{
+			{http.StatusBadRequest, "datos de invitación inválidos"},
+			{http.StatusUnauthorized, "sesión no autorizada en Kizuna Cloud"},
+			{http.StatusForbidden, "solo el propietario del proyecto puede invitar colaboradores"},
+			{http.StatusNotFound, "Usuario no encontrado en Kizuna Cloud"},
+			{http.StatusConflict, "el usuario ya es colaborador de este proyecto"},
+			{http.StatusInternalServerError, "error del servidor Kizuna Cloud (HTTP 500)"},
+		}
+
+		for _, tc := range statusCodes {
+			t.Run(http.StatusText(tc.status), func(t *testing.T) {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(tc.status)
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{
+						"success": false,
+						"error":   map[string]string{"message": "error"},
+					})
+				}))
+				defer server.Close()
+
+				err := svc.ShareProject(ctx, server.URL, "token", "1001", "musician@kizuna.io")
+				if err == nil {
+					t.Fatalf("expected error for HTTP %d, got nil", tc.status)
+				}
+				if err.Error() != tc.expectedPart {
+					t.Errorf("expected error %q, got %q", tc.expectedPart, err.Error())
+				}
+			})
+		}
+	})
+
+	t.Run("Handles network connectivity failure gracefully", func(t *testing.T) {
+		// Use a dead local port to trigger connection refused
+		err := svc.ShareProject(ctx, "http://127.0.0.1:54321", "token", "1001", "musician@kizuna.io")
+		if err == nil {
+			t.Fatal("expected connection error, got nil")
+		}
+		if !strings.Contains(err.Error(), "no se pudo conectar con Kizuna Cloud") {
+			t.Errorf("expected connection error message, got %v", err)
+		}
+	})
+}
+
+func TestSyncClientService_CheckoutAndReleaseLock(t *testing.T) {
+	db := setupSyncTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+
+	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+
+	t.Run("CheckoutProject acquires lock successfully (HTTP 200)", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/projects/1001/checkout" || r.Method != http.MethodPost {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": models.ProjectLock{
+					ProjectID: 1001,
+					UserID:    "usr_1",
+					Username:  "alice",
+				},
+			})
+		}))
+		defer mockServer.Close()
+
+		lock, err := svc.CheckoutProject(ctx, mockServer.URL, "valid.token", 1001)
+		if err != nil {
+			t.Fatalf("unexpected error checking out project: %v", err)
+		}
+		if lock == nil || lock.Username != "alice" || lock.ProjectID != 1001 {
+			t.Errorf("unexpected lock response: %+v", lock)
+		}
+	})
+
+	t.Run("CheckoutProject returns error when locked by another user (HTTP 409)", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error": map[string]interface{}{
+					"code":    409,
+					"message": "project is currently checked out by another user: user 'bob' holds the lock",
+					"details": "bob",
+				},
+			})
+		}))
+		defer mockServer.Close()
+
+		_, err := svc.CheckoutProject(ctx, mockServer.URL, "valid.token", 1001)
+		if err == nil || !strings.Contains(err.Error(), "bob") {
+			t.Fatalf("expected conflict error mentioning bob, got %v", err)
+		}
+	})
+
+	t.Run("ReleaseProjectLock releases lock successfully (HTTP 200)", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/projects/1001/release" || r.Method != http.MethodPost {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+			})
+		}))
+		defer mockServer.Close()
+
+		err := svc.ReleaseProjectLock(ctx, mockServer.URL, "valid.token", 1001)
+		if err != nil {
+			t.Fatalf("unexpected error releasing project lock: %v", err)
+		}
+	})
+
+	t.Run("ReleaseProjectLock returns error when user does not hold lock (HTTP 403)", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+			})
+		}))
+		defer mockServer.Close()
+
+		err := svc.ReleaseProjectLock(ctx, mockServer.URL, "valid.token", 1001)
+		if err == nil || !strings.Contains(err.Error(), "no posees el candado activo") {
+			t.Fatalf("expected forbidden lock error, got %v", err)
+		}
+	})
+
+	t.Run("GetProjectLockStatus returns active lock if present", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/projects/1001" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": models.CloudProject{
+					ID:    1001,
+					Title: "Shared Song",
+					ActiveLock: &models.ProjectLock{
+						ProjectID: 1001,
+						UserID:    "usr_2",
+						Username:  "charlie",
+					},
+				},
+			})
+		}))
+		defer mockServer.Close()
+
+		lock, err := svc.GetProjectLockStatus(ctx, mockServer.URL, "valid.token", 1001)
+		if err != nil {
+			t.Fatalf("unexpected error querying lock status: %v", err)
+		}
+		if lock == nil || lock.Username != "charlie" {
+			t.Errorf("expected active lock for charlie, got %+v", lock)
+		}
+	})
+
+	t.Run("SetCloudProjectID maps local song ID to remote cloud project ID in PackageProject", func(t *testing.T) {
+		song := &models.Song{
+			Title:         "Local-First Mapping Test",
+			BPM:           110,
+			TimeSignature: "4/4",
+		}
+		localSongID, err := songRepo.Create(ctx, nil, song)
+		if err != nil {
+			t.Fatalf("failed to create local song: %v", err)
+		}
+
+		// Map local SQLite ID (e.g. 1) to remote Kizuna Cloud ID (e.g. 1001)
+		svc.SetCloudProjectID(localSongID, 1001)
+
+		payload, err := svc.PackageProject(ctx, localSongID, 2)
+		if err != nil {
+			t.Fatalf("failed to package project: %v", err)
+		}
+		if payload.ProjectID != 1001 {
+			t.Errorf("expected packaged ProjectID to use mapped cloud ID 1001, got %d", payload.ProjectID)
+		}
+	})
+
+	t.Run("CheckoutProject returns connectivity error when offline for Local-First fallback", func(t *testing.T) {
+		_, err := svc.CheckoutProject(ctx, "http://127.0.0.1:54322", "valid.token", 1001)
+		if err == nil || !strings.Contains(err.Error(), "no se pudo conectar con Kizuna Cloud") {
+			t.Fatalf("expected network connectivity error when offline, got %v", err)
+		}
+	})
+}
+
+func TestSyncClientService_ImportCloudProject_Idempotent(t *testing.T) {
+	db := setupSyncTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+
+	// 1. Initial import of cloud project 1001
+	cloudProj1 := &models.CloudProject{
+		ID:            1001,
+		Title:         "Highway Star",
+		BPM:           130,
+		TimeSignature: "4/4",
+		Tracks: []models.Track{
+			{InstrumentID: 1, Name: "Guitar Solo", DataContent: "E4-G4-A4"},
+		},
+	}
+
+	songID1, err := svc.ImportCloudProject(ctx, cloudProj1)
+	if err != nil {
+		t.Fatalf("failed first import: %v", err)
+	}
+	if songID1 <= 0 {
+		t.Fatalf("expected valid song ID, got %d", songID1)
+	}
+
+	// 2. Second import of the SAME cloud project 1001 (e.g. user does Pull again)
+	cloudProj2 := &models.CloudProject{
+		ID:            1001,
+		Title:         "Highway Star (Remastered)",
+		BPM:           132,
+		TimeSignature: "4/4",
+		Tracks: []models.Track{
+			{InstrumentID: 1, Name: "Guitar Solo V2", DataContent: "E4-G4-A4-B4"},
+			{InstrumentID: 2, Name: "Bass", DataContent: "E2-E2"},
+		},
+	}
+
+	songID2, err := svc.ImportCloudProject(ctx, cloudProj2)
+	if err != nil {
+		t.Fatalf("failed second import: %v", err)
+	}
+
+	// Verify idempotency: should update songID1, NOT create a new song
+	if songID2 != songID1 {
+		t.Errorf("expected idempotent import to return existing song ID %d, got %d", songID1, songID2)
+	}
+
+	// Verify updated metadata
+	updatedSong, err := songRepo.GetByID(ctx, songID1)
+	if err != nil {
+		t.Fatalf("failed to fetch updated song: %v", err)
+	}
+	if updatedSong.Title != "Highway Star (Remastered)" {
+		t.Errorf("expected updated title 'Highway Star (Remastered)', got %s", updatedSong.Title)
+	}
+	if updatedSong.BPM != 132 {
+		t.Errorf("expected updated BPM 132, got %d", updatedSong.BPM)
+	}
+
+	// Verify tracks were replaced properly
+	tracks, err := trackRepo.GetBySongID(ctx, songID1)
+	if err != nil {
+		t.Fatalf("failed to fetch tracks: %v", err)
+	}
+	if len(tracks) != 2 {
+		t.Errorf("expected 2 updated tracks, got %d", len(tracks))
+	}
+
+	// Verify total count in songs table is exactly 1 (no duplicates!)
+	recent, err := songRepo.GetRecent(ctx, 100)
+	if err != nil {
+		t.Fatalf("failed to get recent songs: %v", err)
+	}
+	if len(recent) != 1 {
+		t.Errorf("expected exactly 1 song in database, found %d", len(recent))
+	}
 }

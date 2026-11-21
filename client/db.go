@@ -99,7 +99,7 @@ func NewDBManagerWithDB(db *sql.DB) *DBManager {
 	return &DBManager{
 		db:                         db,
 		songService:                service.NewSongService(db, songRepo, trackRepo),
-		trackService:               service.NewTrackService(trackRepo),
+		trackService:               service.NewTrackService(trackRepo, audioRepo),
 		albumService:               service.NewAlbumService(albumRepo, songRepo),
 		audioService:               service.NewAudioService(audioRepo),
 		quickIdeaService:           service.NewQuickIdeaService(db, quickIdeaRepo),

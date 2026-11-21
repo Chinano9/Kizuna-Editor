@@ -3,10 +3,14 @@
     Centralized, transactional, immutable state management for the active editing session.
 */
 import { writable, derived, get } from "svelte/store";
-import { Song, Track } from "@shared/types/wails";
+import type { Song, Track } from "@shared/types/wails";
+
+export type ActiveSong = Song & {
+    cloud_id?: number | string | null;
+};
 
 // Internal writable for the complete song object
-const songInternal = writable<Song | null>(null);
+const songInternal = writable<ActiveSong | null>(null);
 
 // Unique identifier for the song in the database (0 = New/Unsaved)
 export const songId = writable<number>(0);
@@ -45,56 +49,56 @@ export const tracks = derived(songInternal, ($song) =>
  */
 export const activeSongStore = {
     subscribe: songInternal.subscribe,
-    setSong: (newSong: Song | null) => {
+    update: songInternal.update,
+    setSong: (newSong: ActiveSong | null) => {
         song.set(newSong);
     },
-    setTitle: (title: string) => {
+    setCloudId: (cloudId: number | string | null) => {
         songInternal.update((curr) => {
             if (!curr) return null;
             return {
                 ...curr,
-                title,
-                updated_at: new Date().toISOString(),
-            } as Song;
+                cloud_id: cloudId,
+            } as ActiveSong;
+        });
+    },
+    setTitle: (title: string) => {
+        songInternal.update((curr) => {
+            if (!curr) return null;
+            curr.title = title;
+            curr.updated_at = new Date().toISOString();
+            return curr;
         });
     },
     addTrack: (track: Track) => {
         songInternal.update((curr) => {
             if (!curr) return null;
             const currentTracks = curr.tracks || [];
-            return {
-                ...curr,
-                tracks: [...currentTracks, track],
-                updated_at: new Date().toISOString(),
-            } as Song;
+            curr.tracks = [...currentTracks, track];
+            curr.updated_at = new Date().toISOString();
+            return curr;
         });
     },
     updateTrack: (updatedTrack: Track) => {
         songInternal.update((curr) => {
             if (!curr || !curr.tracks) return curr;
-            const newTracks = curr.tracks.map((t) =>
+            curr.tracks = curr.tracks.map((t) =>
                 t.id === updatedTrack.id ? updatedTrack : t
             );
-            return {
-                ...curr,
-                tracks: newTracks,
-                updated_at: new Date().toISOString(),
-            } as Song;
+            curr.updated_at = new Date().toISOString();
+            return curr;
         });
     },
     removeTrack: (index: number) => {
         songInternal.update((curr) => {
             if (!curr || !curr.tracks) return curr;
-            const newTracks = curr.tracks.filter((_, idx) => idx !== index);
-            return {
-                ...curr,
-                tracks: newTracks,
-                updated_at: new Date().toISOString(),
-            } as Song;
+            curr.tracks = curr.tracks.filter((_, idx) => idx !== index);
+            curr.updated_at = new Date().toISOString();
+            return curr;
         });
     },
-    createNewSong: (): Song => {
-        const defaultTrack = new Track({
+    createNewSong: (): ActiveSong => {
+        const defaultTrack = {
             id: 0,
             song_id: 0,
             instrument_id: 1, // Default to electric guitar
@@ -103,8 +107,8 @@ export const activeSongStore = {
             display_mode: "BOTH",
             is_muted: false,
             created_at: new Date().toISOString(),
-        });
-        const defaultSong = new Song({
+        } as unknown as Track;
+        const defaultSong = {
             id: 0,
             title: "My New Idea",
             tracks: [defaultTrack],
@@ -113,7 +117,7 @@ export const activeSongStore = {
             key_signature: "",
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
-        });
+        } as unknown as ActiveSong;
         songInternal.set(defaultSong);
         songId.set(0);
         return defaultSong;

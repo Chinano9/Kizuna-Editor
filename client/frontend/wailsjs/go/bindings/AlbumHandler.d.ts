@@ -16,4 +16,6 @@ export function ListAlbums():Promise<Array<models.Album>>;
 
 export function RemoveSongFromAlbum(arg1:number):Promise<void>;
 
+export function ReorderAlbumSongs(arg1:number,arg2:Array<number>):Promise<void>;
+
 export function UpdateAlbum(arg1:models.Album):Promise<void>;

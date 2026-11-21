@@ -198,6 +198,101 @@ func TestRepositories(t *testing.T) {
 		}
 	})
 
+	t.Run("Issue #21: Track and Audio changes update Song updated_at and ContentHash", func(t *testing.T) {
+		sID, err := songRepo.Create(ctx, nil, &models.Song{
+			Title:         "Session Hash Test",
+			BPM:           120,
+			TimeSignature: "4/4",
+			KeySignature:  "Em",
+		})
+		if err != nil {
+			t.Fatalf("failed to create song: %v", err)
+		}
+
+		// Force an older timestamp on songs.updated_at to verify touch on audio/track creation
+		_, err = db.ExecContext(ctx, `UPDATE songs SET updated_at = '2025-01-01 00:00:00' WHERE id = ?`, sID)
+		if err != nil {
+			t.Fatalf("failed to backdate song updated_at: %v", err)
+		}
+
+		songBefore, err := songRepo.GetByID(ctx, sID)
+		if err != nil {
+			t.Fatalf("failed to get song before changes: %v", err)
+		}
+		if len(songBefore.ContentHash) != 16 {
+			t.Fatalf("expected 16-char ContentHash, got %q", songBefore.ContentHash)
+		}
+		initialHash := songBefore.ContentHash
+		initialUpdatedAt := songBefore.UpdatedAt
+
+		// 1. Adding a track updates songs.updated_at and changes ContentHash
+		trackID, err := trackRepo.Create(ctx, nil, &models.Track{
+			SongID:       sID,
+			InstrumentID: models.InstrumentElectricGuitarID,
+			Name:         "Rhythm Guitar",
+			DataContent:  ":4 2.5 2.4",
+		})
+		if err != nil {
+			t.Fatalf("failed to create track: %v", err)
+		}
+
+		songAfterTrack, err := songRepo.GetByID(ctx, sID)
+		if err != nil {
+			t.Fatalf("failed to get song after track creation: %v", err)
+		}
+		if !songAfterTrack.UpdatedAt.After(initialUpdatedAt) {
+			t.Errorf("expected songs.updated_at to advance after adding track: before=%v, after=%v", initialUpdatedAt, songAfterTrack.UpdatedAt)
+		}
+		if songAfterTrack.ContentHash == initialHash {
+			t.Errorf("expected ContentHash to change after adding track")
+		}
+		hashAfterTrack := songAfterTrack.ContentHash
+
+		// 2. Recording an audio take updates songs.updated_at and changes ContentHash
+		_, _ = db.ExecContext(ctx, `UPDATE songs SET updated_at = '2025-01-02 00:00:00' WHERE id = ?`, sID)
+		songMid, _ := songRepo.GetByID(ctx, sID)
+
+		_, err = audioRepo.Create(ctx, &models.AudioVersion{
+			SongID:      sID,
+			TrackID:     &trackID,
+			VersionName: "Take 1",
+			FilePath:    "/audio/session_take1.wav",
+			Notes:       "Live room",
+		})
+		if err != nil {
+			t.Fatalf("failed to create audio take: %v", err)
+		}
+
+		songAfterAudio, err := songRepo.GetByID(ctx, sID)
+		if err != nil {
+			t.Fatalf("failed to get song after audio creation: %v", err)
+		}
+		if !songAfterAudio.UpdatedAt.After(songMid.UpdatedAt) {
+			t.Errorf("expected songs.updated_at to advance after recording audio take: before=%v, after=%v", songMid.UpdatedAt, songAfterAudio.UpdatedAt)
+		}
+		if songAfterAudio.ContentHash == hashAfterTrack {
+			t.Errorf("expected ContentHash to change after recording audio take")
+		}
+
+		// 3. GetRecent includes the computed ContentHash for the dashboard list
+		recent, err := songRepo.GetRecent(ctx, 10)
+		if err != nil {
+			t.Fatalf("failed to get recent songs: %v", err)
+		}
+		var foundInRecent bool
+		for _, rs := range recent {
+			if rs.ID == sID {
+				foundInRecent = true
+				if rs.ContentHash != songAfterAudio.ContentHash {
+					t.Errorf("expected GetRecent ContentHash %q to match GetByID %q", rs.ContentHash, songAfterAudio.ContentHash)
+				}
+			}
+		}
+		if !foundInRecent {
+			t.Errorf("expected song %d in GetRecent results", sID)
+		}
+	})
+
 	t.Run("Empty Query Non-Nil Slice and JSON Array Marshalling", func(t *testing.T) {
 		// Verify fresh DB without songs produces non-nil empty slices that serialize to "[]"
 		freshDB, err := database.Open(database.DefaultConfig(":memory:"))

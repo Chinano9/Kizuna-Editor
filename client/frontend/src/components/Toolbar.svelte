@@ -21,13 +21,24 @@
     import { get } from "svelte/store";
     import { onMount } from "svelte";
     import { SaveSong, GetAudioVersionsForSong } from "../../wailsjs/go/main/App";
-    import { song, autoBar } from "../stores/projectStore";
-    import { syncStore } from "@/features/cloud-sync/stores/syncStore";
+    import { song, autoBar, autoSaveStore, activeSongStore } from "../stores/projectStore";
+    import { syncStore, isSongReadOnly } from "@/features/cloud-sync/stores/syncStore";
     import AuthModal from "@/features/cloud-sync/components/AuthModal.svelte";
+    import ShareProjectModal from "@/features/cloud-sync/components/ShareProjectModal.svelte";
     import { toastStore } from "@shared/stores/toastStore";
     import type { AudioVersion } from "@shared/types/wails";
 
     let isAuthModalOpen = false;
+    let isShareModalOpen = false;
+
+    $: activeCloudId = Number(
+        $activeSongStore?.cloud_id || ($song?.id ? syncStore.getCloudIdForSong($song.id) : 0) || 0
+    );
+    $: isReadOnly = isSongReadOnly($syncStore, activeCloudId);
+    $: canPushToCloud =
+        !$syncStore.isSyncing &&
+        !$syncStore.isLockedByOther &&
+        (activeCloudId === 0 || $syncStore.hasActiveCheckout || $syncStore.isOffline);
 
     onMount(() => {
         const handleSessionExpired = () => {
@@ -40,7 +51,25 @@
         };
     });
 
+    function handleTitleInput() {
+        autoSaveStore.scheduleSave();
+    }
+
     async function save() {
+        if ($syncStore.isLockedByOther) {
+            toastStore.warning(
+                `Edición deshabilitada: el proyecto está bloqueado por ${$syncStore.lockedBy || "otro colaborador"}.`
+            );
+            return;
+        }
+
+        if (isReadOnly) {
+            toastStore.warning(
+                "Proyecto en modo solo lectura: haz clic en '🔒 Editar (Check-out)' para adquirir el candado antes de editar."
+            );
+            return;
+        }
+
         const currentSong = get(song);
 
         if (!currentSong) {
@@ -49,10 +78,11 @@
         }
 
         try {
-            console.log("Saving song object:", currentSong);
-            const updatedSong = await SaveSong(currentSong);
-            song.set(updatedSong);
-            toastStore.success(`Project saved successfully (ID: ${updatedSong.id})`);
+            const updatedSong = await autoSaveStore.flush();
+            if (updatedSong) {
+                song.set(updatedSong);
+                toastStore.success(`Project saved successfully (ID: ${updatedSong.id})`);
+            }
         } catch (err) {
             console.error("Failed to save project:", err);
             toastStore.error("Failed to save project.");
@@ -68,22 +98,62 @@
             return;
         }
 
+        if ($syncStore.isLockedByOther) {
+            toastStore.warning(
+                `No puedes sincronizar: el proyecto está bloqueado por ${$syncStore.lockedBy || "otro colaborador"}.`
+            );
+            return;
+        }
+
         let currentSong = get(song);
         if (!currentSong) {
             toastStore.warning("No hay ninguna canción activa para respaldar.");
             return;
         }
 
-        // Auto-save local changes if unsaved or ID is 0
-        if (currentSong.id === 0) {
+        const cloudId =
+            Number($activeSongStore?.cloud_id) ||
+            (currentSong.id > 0 ? syncStore.getCloudIdForSong(currentSong.id) : 0) ||
+            0;
+
+        // Issue #16: When online and project is already in cloud, user must hold the checkout lock to push updates
+        if (cloudId > 0 && !$syncStore.isOffline && !$syncStore.hasActiveCheckout) {
+            toastStore.warning(
+                "🔒 Debes adquirir el candado ('🔒 Editar (Check-out)') antes de modificar o sincronizar este proyecto."
+            );
+            return;
+        }
+
+        // Issue #16: Before syncing (Push), verify with the cloud if the project is locked by another user
+        if (cloudId > 0) {
             try {
-                const saved = await SaveSong(currentSong);
-                song.set(saved);
-                currentSong = saved;
+                const lockStatus = await syncStore.verifyProjectLock(cloudId);
+                if (lockStatus.isLockedByOther) {
+                    toastStore.warning(
+                        `🔒 No puedes sincronizar: el proyecto está siendo editado por ${lockStatus.lockedBy || "otro colaborador"}.`
+                    );
+                    return;
+                }
+                if (lockStatus.isOffline) {
+                    toastStore.error(
+                        "No se pudo conectar con Kizuna Cloud para sincronizar. Tus cambios siguen guardados localmente."
+                    );
+                    return;
+                }
             } catch (err) {
-                toastStore.error("Debes guardar la canción localmente antes de respaldar.");
-                return;
+                console.warn("Lock status verification skipped or failed before push:", err);
             }
+        }
+
+        // Flush any pending local autosave or initial save (ID === 0) before cloud push
+        try {
+            const flushed = await autoSaveStore.flush();
+            if (flushed) {
+                currentSong = flushed;
+            }
+        } catch (err) {
+            toastStore.error("Debes guardar la canción localmente antes de respaldar.");
+            return;
         }
 
         // Gather all takes/audio versions associated with this project
@@ -96,11 +166,60 @@
 
         try {
             const res = await syncStore.pushProject(currentSong, audioVersions);
-            toastStore.success(`☁️ Proyecto respaldado en Kizuna Cloud (v${res.new_version})`);
+            toastStore.success(
+                `☁️ Proyecto respaldado en Kizuna Cloud (v${res.new_version}) — Candado liberado (Solo lectura)`
+            );
         } catch (err) {
             console.error("Failed cloud backup:", err);
             toastStore.error(err instanceof Error ? err.message : "Error al respaldar en la nube.");
         }
+    }
+
+    async function handleFinishEditing() {
+        if ($syncStore.isCheckingLock || !activeCloudId) return;
+
+        try {
+            await syncStore.releaseProjectLock(activeCloudId);
+            toastStore.success(
+                "🔓 Edición terminada: candado liberado. El editor pasó a modo solo lectura."
+            );
+        } catch (err) {
+            console.error("Failed to release project lock:", err);
+            toastStore.error(
+                err instanceof Error ? err.message : "No se pudo liberar el candado del proyecto."
+            );
+        }
+    }
+
+    async function handleRequestCheckout() {
+        if ($syncStore.isCheckingLock || !activeCloudId) return;
+
+        try {
+            await syncStore.checkoutProject(activeCloudId);
+            toastStore.success("🔒 Candado adquirido. Edición habilitada.");
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : "El proyecto sigue bloqueado.";
+            if ($syncStore.isOffline) {
+                toastStore.info(`⚡ ${msg}`);
+            } else {
+                toastStore.warning(`🔒 ${msg}`);
+            }
+        }
+    }
+
+    function handleShareClick() {
+        const currentSong = get(activeSongStore);
+        let cloudId = currentSong?.cloud_id;
+        if (!cloudId && currentSong && currentSong.id > 0) {
+            cloudId = syncStore.getCloudIdForSong(currentSong.id);
+        }
+
+        if (!cloudId || String(cloudId).trim() === "" || String(cloudId) === "0") {
+            toastStore.warning("Debes respaldar el proyecto en la nube antes de invitar colaboradores");
+            return;
+        }
+
+        isShareModalOpen = true;
     }
 </script>
 
@@ -110,25 +229,102 @@
             type="text"
             class="title-input"
             bind:value={$song.title}
+            on:input={handleTitleInput}
             placeholder="Song Title..."
+            disabled={isReadOnly}
         />
     {/if}
 
     <div class="actions">
+        {#if $syncStore.isAuthenticated && activeCloudId > 0}
+            {#if $syncStore.isLockedByOther}
+                <div
+                    class="lock-badge locked-by-other"
+                    title="Otro colaborador tiene el candado activo. Edición deshabilitada temporalmente (Issue #16)"
+                >
+                    <span>🔒 Bloqueado por {$syncStore.lockedBy || "otro usuario"}</span>
+                    <button
+                        type="button"
+                        class="lock-action-btn"
+                        disabled={$syncStore.isCheckingLock}
+                        on:click={handleRequestCheckout}
+                        title="Consultar a la nube si el candado ya fue liberado"
+                    >
+                        🔄
+                    </button>
+                </div>
+            {:else if $syncStore.isOffline}
+                <div
+                    class="lock-badge offline-badge"
+                    title="Sin conexión a Kizuna Cloud: puedes editar y guardar localmente (Local-First)"
+                >
+                    <span>⚡ Modo Offline (Local)</span>
+                    <button
+                        type="button"
+                        class="lock-action-btn"
+                        disabled={$syncStore.isCheckingLock}
+                        on:click={handleRequestCheckout}
+                        title="Intentar reconectar con Kizuna Cloud y adquirir candado"
+                    >
+                        🔄
+                    </button>
+                </div>
+            {:else if $syncStore.hasActiveCheckout}
+                <button
+                    type="button"
+                    class="release-lock-btn"
+                    disabled={$syncStore.isCheckingLock || $syncStore.isSyncing}
+                    on:click={handleFinishEditing}
+                    title="Liberar el candado en Kizuna Cloud y bloquear edición local (Issue #22)"
+                >
+                    🔓 Terminar edición
+                </button>
+            {:else}
+                <button
+                    type="button"
+                    class="checkout-lock-btn"
+                    disabled={$syncStore.isCheckingLock || $syncStore.isSyncing}
+                    on:click={handleRequestCheckout}
+                    title="Adquirir candado de edición en Kizuna Cloud para desbloquear el editor (Issue #16)"
+                >
+                    🔒 Editar (Check-out)
+                </button>
+            {/if}
+        {/if}
+
         <label class="toggle-switch">
-            <input type="checkbox" bind:checked={$autoBar} />
+            <input
+                type="checkbox"
+                bind:checked={$autoBar}
+                disabled={isReadOnly}
+            />
 
             <span>Auto |</span>
         </label>
 
-        <button class="save-btn" on:click={save}>💾 Save</button>
+        <button
+            class="save-btn"
+            disabled={isReadOnly}
+            on:click={save}
+            title={isReadOnly
+                ? $syncStore.isLockedByOther
+                    ? `Edición bloqueada por ${$syncStore.lockedBy || "otro colaborador"}`
+                    : "Haz clic en '🔒 Editar (Check-out)' para desbloquear la edición"
+                : "Guardar cambios localmente"}
+        >
+            💾 Save
+        </button>
 
         <button
             class="cloud-btn"
             class:syncing={$syncStore.isSyncing}
-            disabled={$syncStore.isSyncing}
+            disabled={!canPushToCloud}
             on:click={backupToCloud}
-            title="Respaldar este proyecto en Kizuna Cloud (Issue #13)"
+            title={!canPushToCloud
+                ? $syncStore.isLockedByOther
+                    ? `Sincronización bloqueada por ${$syncStore.lockedBy || "otro colaborador"}`
+                    : "Adquiere primero el candado ('🔒 Editar') para modificar y sincronizar este proyecto"
+                : "Respaldar este proyecto en Kizuna Cloud y liberar candado (Issues #13, #16, #22)"}
         >
             {#if $syncStore.isSyncing}
                 ⏳ Subiendo...
@@ -136,9 +332,22 @@
                 ☁️ Respaldar Nube
             {/if}
         </button>
+
+        <button
+            class="share-btn"
+            on:click={handleShareClick}
+            title="Compartir proyecto con colaboradores (Issue #15)"
+        >
+            👥 Compartir
+        </button>
     </div>
 
     <AuthModal bind:isOpen={isAuthModalOpen} />
+    <ShareProjectModal
+        bind:isOpen={isShareModalOpen}
+        cloudId={$activeSongStore?.cloud_id || ($song?.id ? syncStore.getCloudIdForSong($song.id) : "") || ""}
+        projectTitle={$song?.title || "Proyecto"}
+    />
 </div>
 
 <style>
@@ -188,6 +397,105 @@
 
     .title-input:focus {
         border-bottom-color: var(--lcd-border-strong);
+    }
+
+    .title-input:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        color: var(--lcd-text-muted);
+    }
+
+    .save-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        transform: none;
+        filter: grayscale(0.4);
+    }
+
+    .lock-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 10px;
+        border-radius: 4px;
+        font-family: var(--lcd-font-ui);
+        font-size: 0.82rem;
+        white-space: nowrap;
+        letter-spacing: 0.04em;
+    }
+
+    .lock-badge.locked-by-other {
+        background: rgba(255, 85, 85, 0.16);
+        border: 1px solid #ff6b6b;
+        color: #ff8787;
+        text-shadow: 0 0 6px rgba(255, 107, 107, 0.35);
+    }
+
+    .lock-badge.offline-badge {
+        background: rgba(255, 201, 102, 0.14);
+        border: 1px solid #ffc966;
+        color: #ffc966;
+        text-shadow: 0 0 6px rgba(255, 201, 102, 0.35);
+    }
+
+    .lock-action-btn {
+        background: transparent;
+        border: 1px solid rgba(255, 135, 135, 0.4);
+        color: inherit;
+        border-radius: 3px;
+        cursor: pointer;
+        padding: 1px 5px;
+        font-size: 0.78rem;
+        transition: all 0.15s ease;
+    }
+
+    .lock-action-btn:hover:not(:disabled) {
+        background: rgba(255, 107, 107, 0.25);
+        border-color: #ff8787;
+    }
+
+    .release-lock-btn,
+    .checkout-lock-btn {
+        position: relative;
+        background: radial-gradient(
+            circle at 50% 0,
+            rgba(255, 184, 108, 0.38) 0,
+            var(--lcd-button-bg) 60%
+        );
+        color: #ffb86c;
+        text-shadow:
+            0 0 3px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow-soft);
+        border: 1px solid #ffb86c;
+        padding: 4px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        box-shadow:
+            0 0 0 1px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow-soft);
+        font-family: var(--lcd-font-ui);
+        font-size: 0.85rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        transition: all 0.15s ease;
+    }
+
+    .release-lock-btn:hover:not(:disabled),
+    .checkout-lock-btn:hover:not(:disabled) {
+        background: radial-gradient(
+            circle at 50% 0,
+            rgba(255, 184, 108, 0.58) 0,
+            var(--lcd-button-bg-soft) 65%
+        );
+        box-shadow: 0 0 8px rgba(255, 184, 108, 0.45);
+        transform: translateY(-1px);
+    }
+
+    .release-lock-btn:disabled,
+    .checkout-lock-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
     }
 
     .actions {
@@ -356,5 +664,46 @@
     .cloud-btn:disabled {
         opacity: 0.5;
         cursor: not-allowed;
+    }
+
+    .share-btn {
+        position: relative;
+        background: radial-gradient(
+            circle at 50% 0,
+            rgba(0, 200, 255, 0.35) 0,
+            var(--lcd-button-bg) 60%
+        );
+        color: #70d6ff;
+        text-shadow:
+            0 0 3px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow-soft);
+        border: 1px solid #70d6ff;
+        padding: 4px 12px;
+        border-radius: 4px;
+        cursor: pointer;
+        white-space: nowrap;
+        box-shadow:
+            0 0 0 1px rgba(0, 0, 0, 0.8),
+            var(--lcd-glow-soft);
+        font-family: var(--lcd-font-ui);
+        font-size: 0.9rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        transition: all 0.15s ease;
+    }
+
+    .share-btn:hover {
+        background: radial-gradient(
+            circle at 50% 0,
+            rgba(0, 200, 255, 0.55) 0,
+            var(--lcd-button-bg-soft) 65%
+        );
+        box-shadow: 0 0 8px rgba(0, 200, 255, 0.45);
+        transform: translateY(-1px);
+        filter: brightness(1.05);
+    }
+
+    .share-btn:active {
+        transform: translateY(1px);
     }
 </style>

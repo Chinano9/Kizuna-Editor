@@ -19,12 +19,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"kizuna/server/internal/collaboration"
 	"kizuna/server/internal/sync"
 	"kizuna/server/pkg/response"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -50,7 +52,7 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projects, err := h.syncEngine.ListUserProjects(user.ID)
+	projects, err := h.syncEngine.ListUserProjects(user.ID, user.Email, user.Username)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to list projects", err.Error())
 		return
@@ -113,7 +115,11 @@ func (h *ProjectHandler) CheckoutProject(w http.ResponseWriter, r *http.Request)
 	lock, err := h.locker.AcquireLock(projectID, user.ID, user.Username, 30*time.Minute)
 	if err != nil {
 		if errors.Is(err, collaboration.ErrProjectLocked) {
-			response.Error(w, http.StatusConflict, err.Error())
+			holder := ""
+			if activeLock, exists := h.locker.GetLock(projectID); exists && activeLock != nil {
+				holder = activeLock.Username
+			}
+			response.Error(w, http.StatusConflict, err.Error(), holder)
 			return
 		}
 		response.Error(w, http.StatusInternalServerError, "failed to acquire lock", err.Error())
@@ -148,4 +154,43 @@ func (h *ProjectHandler) ReleaseProject(w http.ResponseWriter, r *http.Request) 
 	}
 
 	response.Success(w, http.StatusOK, map[string]string{"message": "lock released successfully"})
+}
+
+// ShareProject invites a collaborator by username or email to a cloud project (Issue #15).
+func (h *ProjectHandler) ShareProject(w http.ResponseWriter, r *http.Request) {
+	user, ok := GetUserFromContext(r.Context())
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+
+	idStr := r.PathValue("id")
+	projectID, err := strconv.Atoi(idStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+
+	var req struct {
+		Collaborator string `json:"collaborator"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Collaborator) == "" {
+		response.Error(w, http.StatusBadRequest, "debes ingresar el correo o nombre de usuario del colaborador")
+		return
+	}
+
+	if err := h.syncEngine.Share(projectID, user.ID, strings.TrimSpace(req.Collaborator)); err != nil {
+		if errors.Is(err, sync.ErrProjectNotFound) {
+			response.Error(w, http.StatusNotFound, "Usuario no encontrado en Kizuna Cloud")
+			return
+		}
+		if errors.Is(err, sync.ErrUnauthorizedSync) {
+			response.Error(w, http.StatusForbidden, "solo el propietario del proyecto puede invitar colaboradores")
+			return
+		}
+		response.Error(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	response.Success(w, http.StatusOK, map[string]string{"message": "collaborator invited successfully"})
 }

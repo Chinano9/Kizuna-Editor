@@ -166,98 +166,6 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class CloudPushResult {
-	    project_id: number;
-	    new_version: number;
-	    // Go type: time
-	    synced_at: any;
-	    status: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new CloudPushResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.project_id = source["project_id"];
-	        this.new_version = source["new_version"];
-	        this.synced_at = this.convertValues(source["synced_at"], null);
-	        this.status = source["status"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class Instrument {
-	    id: number;
-	    name: string;
-	    type: string;
-	    default_clef: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new Instrument(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.type = source["type"];
-	        this.default_clef = source["default_clef"];
-	    }
-	}
-	export class QuickIdea {
-	    id: number;
-	    file_path: string;
-	    // Go type: time
-	    created_at: any;
-	    duration_seconds?: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new QuickIdea(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.file_path = source["file_path"];
-	        this.created_at = this.convertValues(source["created_at"], null);
-	        this.duration_seconds = source["duration_seconds"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class Track {
 	    id: number;
 	    song_id: number;
@@ -303,6 +211,200 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class CloudProject {
+	    id: number;
+	    owner_id: string;
+	    title: string;
+	    bpm: number;
+	    time_signature: string;
+	    key_signature: string;
+	    version: number;
+	    tracks: Track[];
+	    audio_versions: AudioVersion[];
+	    encrypted_payload?: string;
+	    encryption_algo?: string;
+	    is_encrypted?: boolean;
+	    // Go type: time
+	    created_at: any;
+	    // Go type: time
+	    updated_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloudProject(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.owner_id = source["owner_id"];
+	        this.title = source["title"];
+	        this.bpm = source["bpm"];
+	        this.time_signature = source["time_signature"];
+	        this.key_signature = source["key_signature"];
+	        this.version = source["version"];
+	        this.tracks = this.convertValues(source["tracks"], Track);
+	        this.audio_versions = this.convertValues(source["audio_versions"], AudioVersion);
+	        this.encrypted_payload = source["encrypted_payload"];
+	        this.encryption_algo = source["encryption_algo"];
+	        this.is_encrypted = source["is_encrypted"];
+	        this.created_at = this.convertValues(source["created_at"], null);
+	        this.updated_at = this.convertValues(source["updated_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CloudPushResult {
+	    project_id: number;
+	    new_version: number;
+	    // Go type: time
+	    synced_at: any;
+	    status: string;
+	    content_hash?: string;
+	    lock_released?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloudPushResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project_id = source["project_id"];
+	        this.new_version = source["new_version"];
+	        this.synced_at = this.convertValues(source["synced_at"], null);
+	        this.status = source["status"];
+	        this.content_hash = source["content_hash"];
+	        this.lock_released = source["lock_released"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Instrument {
+	    id: number;
+	    name: string;
+	    type: string;
+	    default_clef: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Instrument(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.type = source["type"];
+	        this.default_clef = source["default_clef"];
+	    }
+	}
+	export class ProjectLock {
+	    project_id: number;
+	    user_id: string;
+	    username: string;
+	    // Go type: time
+	    acquired_at: any;
+	    // Go type: time
+	    expires_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectLock(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project_id = source["project_id"];
+	        this.user_id = source["user_id"];
+	        this.username = source["username"];
+	        this.acquired_at = this.convertValues(source["acquired_at"], null);
+	        this.expires_at = this.convertValues(source["expires_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class QuickIdea {
+	    id: number;
+	    file_path: string;
+	    // Go type: time
+	    created_at: any;
+	    duration_seconds?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new QuickIdea(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.file_path = source["file_path"];
+	        this.created_at = this.convertValues(source["created_at"], null);
+	        this.duration_seconds = source["duration_seconds"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Song {
 	    id: number;
 	    album_id?: number;
@@ -315,6 +417,7 @@ export namespace models {
 	    // Go type: time
 	    updated_at: any;
 	    tracks?: Track[];
+	    content_hash?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Song(source);
@@ -331,6 +434,7 @@ export namespace models {
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	        this.tracks = this.convertValues(source["tracks"], Track);
+	        this.content_hash = source["content_hash"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

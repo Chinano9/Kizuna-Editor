@@ -21,12 +21,14 @@ const STORAGE_KEYS = {
 
 export class AuthApiError extends Error {
     public code: number;
+    public status: number;
     public details?: string;
 
     constructor(message: string, code: number = 400, details?: string) {
         super(message);
         this.name = "AuthApiError";
         this.code = code;
+        this.status = code;
         this.details = details;
     }
 }

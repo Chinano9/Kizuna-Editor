@@ -35,7 +35,8 @@ type Song struct {
 	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
 
 	// Relational associations (ignored in direct simple SQL table queries)
-	Tracks []Track `db:"-" json:"tracks,omitempty"`
+	Tracks      []Track `db:"-" json:"tracks,omitempty"`
+	ContentHash string  `db:"-" json:"content_hash,omitempty"`
 }
 
 // NewSong instantiates a new Song with default settings and timestamp.

@@ -4,12 +4,16 @@
         Lists remote projects from Kizuna Cloud and enables pulling / importing to local SQLite.
     */
     import { onMount } from "svelte";
-    import { syncStore } from "../stores/syncStore.ts";
+    import { syncStore, computeProjectSyncStatus } from "../stores/syncStore.ts";
     import type { CloudProject } from "../types/sync.ts";
     import { songId } from "@/stores/projectStore";
     import { currentView } from "@shared/stores/viewStore";
     import { toastStore } from "@shared/stores/toastStore";
     import { formatDate } from "@shared/lib/formatters";
+    import Modal from "@shared/components/ui/Modal.svelte";
+    import Button from "@shared/components/ui/Button.svelte";
+    import { GetSong } from "wailsjs/go/main/App";
+    import type { models } from "wailsjs/go/models";
 
     export let onOpenAuthModal: () => void = () => {};
 
@@ -17,6 +21,10 @@
     let isLoading = false;
     let errorMessage = "";
     let downloadingId: number | null = null;
+
+    let showOverwriteModal = false;
+    let pendingProject: CloudProject | null = null;
+    let pendingLocalSongId: number | null = null;
 
     async function fetchCloudProjects() {
         if (!$syncStore.isAuthenticated) {
@@ -40,6 +48,41 @@
 
     async function handleDownload(project: CloudProject) {
         if (downloadingId !== null) return;
+
+        // Check if this cloud project is already mapped locally
+        const existingEntry = Object.entries($syncStore.cloudProjectMappings).find(
+            ([_, meta]) => meta.cloudProjectId === project.id
+        );
+        const existingLocalId = existingEntry ? Number(existingEntry[0]) : 0;
+
+        if (existingLocalId > 0) {
+            let localSong: models.Song | null = null;
+            try {
+                if (typeof GetSong === "function") {
+                    localSong = await GetSong(existingLocalId);
+                }
+            } catch {
+                localSong = null;
+            }
+
+            if (localSong) {
+                const mapping = $syncStore.cloudProjectMappings[existingLocalId];
+                const syncInfo = computeProjectSyncStatus(localSong, mapping, project);
+
+                // If local project has unpushed modifications or conflict, prompt the user for control
+                if (syncInfo.status === "local_ahead" || syncInfo.status === "conflict") {
+                    pendingProject = project;
+                    pendingLocalSongId = existingLocalId;
+                    showOverwriteModal = true;
+                    return;
+                }
+            }
+        }
+
+        await executeDownload(project);
+    }
+
+    async function executeDownload(project: CloudProject) {
         downloadingId = project.id;
 
         try {
@@ -58,6 +101,33 @@
         } finally {
             downloadingId = null;
         }
+    }
+
+    async function confirmOverwrite() {
+        showOverwriteModal = false;
+        if (pendingProject) {
+            const proj = pendingProject;
+            pendingProject = null;
+            pendingLocalSongId = null;
+            await executeDownload(proj);
+        }
+    }
+
+    function goToEditorToPush() {
+        showOverwriteModal = false;
+        if (pendingLocalSongId) {
+            songId.set(pendingLocalSongId);
+            currentView.set("editor");
+            toastStore.info("Abre el proyecto para hacer Push de tus cambios locales pendientes.");
+        }
+        pendingProject = null;
+        pendingLocalSongId = null;
+    }
+
+    function cancelOverwrite() {
+        showOverwriteModal = false;
+        pendingProject = null;
+        pendingLocalSongId = null;
     }
 
     $: if ($syncStore.isAuthenticated) {
@@ -152,9 +222,19 @@
                         <h2 class="project-title" title={project.title}>
                             {project.title || "Sin título"}
                         </h2>
-                        <span class="version-badge" title="Versión en la nube">
-                            v{project.version || 1}
-                        </span>
+                        <div class="badges-group">
+                            {#if project.active_lock}
+                                <span
+                                    class="lock-status-badge"
+                                    title={`Bloqueado temporalmente por ${project.active_lock.username} (Issue #16)`}
+                                >
+                                    🔒 {project.active_lock.username}
+                                </span>
+                            {/if}
+                            <span class="version-badge" title="Versión en la nube">
+                                v{project.version || 1}
+                            </span>
+                        </div>
                     </div>
 
                     <div class="project-meta">
@@ -206,6 +286,40 @@
             {/each}
         </div>
     {/if}
+
+    <Modal
+        isOpen={showOverwriteModal}
+        title="⚠️ Cambios locales pendientes"
+        maxWidth="540px"
+        on:close={cancelOverwrite}
+    >
+        <div class="overwrite-modal-content">
+            <p class="modal-text">
+                El proyecto <strong>"{pendingProject?.title || "Sin título"}"</strong> tiene modificaciones locales en esta máquina que aún no has respaldado en Kizuna Cloud.
+            </p>
+            <div class="warning-callout">
+                <span class="callout-icon">⚠️</span>
+                <span>
+                    Si descargas la versión de la nube (v{pendingProject?.version || 1}), tus cambios locales y pistas no respaldadas serán sobrescritos.
+                </span>
+            </div>
+            <p class="tip-callout">
+                ¿Deseas sobrescribir y descargar la versión de la nube, o prefieres ir al proyecto para hacer un <strong>Push</strong> primero?
+            </p>
+        </div>
+
+        <div slot="footer" class="modal-footer-actions">
+            <Button variant="danger" on:click={confirmOverwrite}>
+                Sobreescribir y Descargar
+            </Button>
+            <Button variant="secondary" on:click={goToEditorToPush}>
+                Ir a hacer Push
+            </Button>
+            <Button variant="ghost" on:click={cancelOverwrite}>
+                Cancelar
+            </Button>
+        </div>
+    </Modal>
 </div>
 
 <style>
@@ -377,6 +491,24 @@
         font-family: var(--font-lcd, monospace);
     }
 
+    .badges-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .lock-status-badge {
+        background: rgba(255, 107, 107, 0.14);
+        color: #ff8787;
+        border: 1px solid #ff6b6b;
+        font-size: 0.72rem;
+        font-weight: bold;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-family: var(--font-lcd, monospace);
+        white-space: nowrap;
+    }
+
     .project-meta {
         font-size: 0.85rem;
         color: var(--lcd-dim, #7aa35f);
@@ -432,5 +564,51 @@
         to {
             transform: rotate(360deg);
         }
+    }
+
+    .overwrite-modal-content {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        color: var(--lcd-text, #c8ff9f);
+        font-family: var(--font-lcd, "Courier New", monospace);
+        font-size: 0.95rem;
+        line-height: 1.5;
+    }
+
+    .modal-text {
+        margin: 0;
+    }
+
+    .warning-callout {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 12px 14px;
+        background: rgba(255, 176, 0, 0.12);
+        border: 1px solid rgba(255, 176, 0, 0.4);
+        border-radius: 4px;
+        color: #ffd066;
+        font-size: 0.9rem;
+    }
+
+    .callout-icon {
+        font-size: 1.2rem;
+        line-height: 1;
+    }
+
+    .tip-callout {
+        margin: 0;
+        color: var(--lcd-dim, #7aa35f);
+        font-size: 0.88rem;
+    }
+
+    .modal-footer-actions {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        flex-wrap: wrap;
     }
 </style>

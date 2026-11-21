@@ -86,3 +86,9 @@ func (h *AlbumHandler) RemoveSongFromAlbum(songID int) error {
 func (h *AlbumHandler) GetAlbumSongs(albumID int) ([]models.Song, error) {
 	return h.albumService.GetAlbumSongs(context.Background(), albumID)
 }
+
+// ReorderAlbumSongs persists the custom song order (Issue #18).
+func (h *AlbumHandler) ReorderAlbumSongs(albumID int, songIDs []int) error {
+	log.Printf("[AlbumHandler] Reordering album ID %d: %v", albumID, songIDs)
+	return h.albumService.ReorderAlbumSongs(context.Background(), albumID, songIDs)
+}

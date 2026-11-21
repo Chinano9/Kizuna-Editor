@@ -140,6 +140,16 @@ func (s *SongService) SaveSong(ctx context.Context, song *models.Song) (*models.
 		return nil, fmt.Errorf("song cannot be nil")
 	}
 
+	if strings.TrimSpace(song.Title) == "" {
+		song.Title = "Untitled Idea"
+	}
+	if song.BPM <= 0 {
+		song.BPM = 120
+	}
+	if strings.TrimSpace(song.TimeSignature) == "" {
+		song.TimeSignature = "4/4"
+	}
+
 	if err := song.Validate(); err != nil {
 		return nil, fmt.Errorf("validation error: %w", err)
 	}
@@ -197,6 +207,11 @@ func (s *SongService) SaveSong(ctx context.Context, song *models.Song) (*models.
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit transaction: %w", err)
+	}
+
+	// Reload from SQLite to include updated_at timestamp and computed ContentHash (Issue #21)
+	if refreshed, err := s.GetSong(ctx, song.ID); err == nil && refreshed != nil {
+		return refreshed, nil
 	}
 
 	return song, nil

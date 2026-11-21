@@ -4,3 +4,4 @@
 */
 
 export * from "@/features/editor/stores/activeSongStore";
+export * from "@/features/editor/stores/autoSaveStore";

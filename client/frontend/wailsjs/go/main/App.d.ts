@@ -12,6 +12,8 @@ export function AssignSongToAlbum(arg1:number,arg2:number):Promise<void>;
 
 export function AudioHandler():Promise<bindings.AudioHandler>;
 
+export function CheckoutProject(arg1:string,arg2:string,arg3:number):Promise<models.ProjectLock>;
+
 export function ConvertQuickIdeaToSong(arg1:number,arg2:string):Promise<number>;
 
 export function CreateAlbum(arg1:string,arg2:string,arg3:string):Promise<models.Album>;
@@ -36,6 +38,8 @@ export function GetAvailableDrivers():Promise<Array<string>>;
 
 export function GetCurrentDriver():Promise<string>;
 
+export function GetEncryptionKeyFingerprint():Promise<string>;
+
 export function GetInputDevices():Promise<Array<audio.AudioDevice>>;
 
 export function GetInstruments():Promise<Array<models.Instrument>>;
@@ -43,6 +47,8 @@ export function GetInstruments():Promise<Array<models.Instrument>>;
 export function GetPlaybackDuration():Promise<number>;
 
 export function GetPlaybackPosition():Promise<number>;
+
+export function GetProjectLockStatus(arg1:string,arg2:string,arg3:number):Promise<models.ProjectLock>;
 
 export function GetQuickIdeas():Promise<Array<models.QuickIdea>>;
 
@@ -52,6 +58,8 @@ export function GetSong(arg1:number):Promise<models.Song>;
 
 export function ListAlbums():Promise<Array<models.Album>>;
 
+export function ListCloudProjects(arg1:string,arg2:string):Promise<Array<models.CloudProject>>;
+
 export function PauseAudio():Promise<void>;
 
 export function PlayAudio(arg1:string):Promise<void>;
@@ -59,6 +67,8 @@ export function PlayAudio(arg1:string):Promise<void>;
 export function PullAndImportProject(arg1:string,arg2:string,arg3:number):Promise<number>;
 
 export function PushProjectToCloud(arg1:string,arg2:string,arg3:number,arg4:number):Promise<models.CloudPushResult>;
+
+export function ReleaseProjectLock(arg1:string,arg2:string,arg3:number):Promise<void>;
 
 export function RemoveSongFromAlbum(arg1:number):Promise<void>;
 
@@ -71,6 +81,12 @@ export function SeekAudio(arg1:number):Promise<void>;
 export function SetAudioDriver(arg1:string):Promise<void>;
 
 export function SetAudioVolume(arg1:number):Promise<void>;
+
+export function SetCloudProjectID(arg1:number,arg2:number):Promise<void>;
+
+export function SetCloudSession(arg1:string,arg2:string):Promise<void>;
+
+export function ShareProject(arg1:string,arg2:string):Promise<void>;
 
 export function SongHandler():Promise<bindings.SongHandler>;
 

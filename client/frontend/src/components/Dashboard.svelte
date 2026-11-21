@@ -26,16 +26,73 @@
     import { songId, activeSongStore } from "../stores/projectStore";
     import { activeTrackIndex } from "@/stores/trackStore";
     import { currentView } from "../stores/viewStore";
+    import {
+        syncStore,
+        computeProjectSyncStatus,
+        deduplicateRecentSongs,
+        type ProjectSyncComparison,
+        type CloudProjectMeta,
+    } from "@/features/cloud-sync/stores/syncStore";
+    import type { CloudProject } from "@/features/cloud-sync/types/sync";
+    import { formatDate } from "@shared/lib/formatters";
 
     let recentSongs: models.Song[] = [];
+    let cloudProjectsById: Record<number, CloudProject> = {};
+    let isCheckingCloud = false;
 
-    onMount(async () => {
+    $: uniqueRecentSongs = deduplicateRecentSongs(recentSongs, $syncStore.cloudProjectMappings);
+
+    async function loadDashboardData() {
         try {
             recentSongs = (await GetRecentSongs()) ?? [];
         } catch (err) {
             console.error("Failed to load recent songs:", err);
             recentSongs = [];
         }
+
+        if ($syncStore.isAuthenticated) {
+            await refreshCloudComparison();
+        } else {
+            cloudProjectsById = {};
+        }
+    }
+
+    async function refreshCloudComparison() {
+        if (!$syncStore.isAuthenticated || isCheckingCloud) return;
+        isCheckingCloud = true;
+        try {
+            const list = await syncStore.listCloudProjects();
+            const map: Record<number, CloudProject> = {};
+            for (const cp of list) {
+                map[cp.id] = cp;
+            }
+            cloudProjectsById = map;
+        } catch (err) {
+            // Local-First resilience: if offline, keep local comparison active without crashing
+            console.warn("Offline or unable to fetch cloud projects for comparison:", err);
+        } finally {
+            isCheckingCloud = false;
+        }
+    }
+
+    function getSongSyncStatus(
+        songItem: models.Song,
+        mappings: typeof $syncStore.cloudProjectMappings,
+        cloudMap: Record<number, CloudProject>
+    ): ProjectSyncComparison {
+        const mapping = mappings[songItem.id] ?? null;
+        const cloudProj = mapping ? cloudMap[mapping.cloudProjectId] ?? null : null;
+        return computeProjectSyncStatus(songItem, mapping, cloudProj);
+    }
+
+    $: if ($syncStore.isAuthenticated) {
+        void refreshCloudComparison();
+    } else {
+        cloudProjectsById = {};
+    }
+
+    onMount(async () => {
+        await loadDashboardData();
     });
 
     function newSong() {
@@ -63,28 +120,90 @@
     </div>
 
     <section class="recent-work">
-        <h2>Recent Work</h2>
+        <div class="section-header">
+            <h2>Recent Work</h2>
+            {#if $syncStore.isAuthenticated}
+                <button
+                    type="button"
+                    class="check-cloud-btn"
+                    disabled={isCheckingCloud}
+                    on:click={refreshCloudComparison}
+                    title="Comparar fechas y checksums de SQLite contra Kizuna Cloud (Issue #21)"
+                >
+                    <span class:spinning={isCheckingCloud}>🔄</span>
+                    <span>{isCheckingCloud ? "Verificando..." : "Verificar nube"}</span>
+                </button>
+            {/if}
+        </div>
 
-        {#if !recentSongs || recentSongs.length === 0}
+        {#if !uniqueRecentSongs || uniqueRecentSongs.length === 0}
             <p>No recent songs found. Start a new idea!</p>
         {:else}
             <div class="grid">
-                {#each recentSongs as song}
+                {#each uniqueRecentSongs as song (song.id)}
+                    {@const syncInfo = getSongSyncStatus(
+                        song,
+                        $syncStore.cloudProjectMappings,
+                        cloudProjectsById
+                    )}
                     <div
                         class="card"
+                        class:status-local-ahead={syncInfo.status === "local_ahead"}
+                        class:status-cloud-ahead={syncInfo.status === "cloud_ahead"}
+                        class:status-conflict={syncInfo.status === "conflict"}
                         on:click={() => openSong(song)}
                         on:keydown={(e) => e.key === "Enter" && openSong(song)}
                         role="button"
                         tabindex="0"
                     >
                         <div class="card-info">
-                            <h3>{song.title}</h3>
+                            <div class="card-top-row">
+                                <h3 title={song.title}>{song.title}</h3>
+                                {#if song.content_hash}
+                                    <span
+                                        class="hash-pill"
+                                        title={`Checksum SHA-256 local: ${song.content_hash}`}
+                                    >
+                                        #{song.content_hash.slice(0, 7)}
+                                    </span>
+                                {/if}
+                            </div>
 
-                            <span class="date"
-                                >Last updated: {new Date(
-                                    song.updated_at,
-                                ).toLocaleDateString()}</span
-                            >
+                            <div class="sync-badge-row">
+                                <span
+                                    class="sync-status-badge {syncInfo.status}"
+                                    title={syncInfo.status === "local_ahead"
+                                        ? "SQLite tiene modificaciones o grabaciones más recientes que el último respaldo en la nube"
+                                        : syncInfo.status === "cloud_ahead"
+                                        ? "Kizuna Cloud tiene una versión más reciente lista para descargar"
+                                        : syncInfo.status === "conflict"
+                                        ? "Tanto SQLite local como Kizuna Cloud tienen cambios nuevos"
+                                        : syncInfo.status === "synced"
+                                        ? "El proyecto local coincide con la versión respaldada en Kizuna Cloud"
+                                        : "Este proyecto solo existe en tu base de datos SQLite local"}
+                                >
+                                    <span class="badge-icon">{syncInfo.icon}</span>
+                                    <span>{syncInfo.label}</span>
+                                    {#if syncInfo.cloudVersion && syncInfo.status !== "local_only"}
+                                        <span class="badge-version">v{syncInfo.cloudVersion}</span>
+                                    {/if}
+                                </span>
+                            </div>
+
+                            <div class="dates-comparison">
+                                <span class="date">
+                                    SQLite: {formatDate(song.updated_at)}
+                                </span>
+                                {#if syncInfo.cloudUpdatedAt}
+                                    <span class="date cloud-date">
+                                        Nube: {formatDate(syncInfo.cloudUpdatedAt)}
+                                    </span>
+                                {:else if syncInfo.lastSyncedAt}
+                                    <span class="date cloud-date">
+                                        Último sync: {formatDate(syncInfo.lastSyncedAt)}
+                                    </span>
+                                {/if}
+                            </div>
                         </div>
                     </div>
                 {/each}
@@ -226,15 +345,57 @@
     }
 
     .recent-work h2 {
-        border-bottom: 1px solid var(--lcd-border);
-        padding-bottom: 10px;
-
-        margin-bottom: 20px;
-
+        margin: 0;
         color: var(--lcd-text-soft);
         text-transform: uppercase;
         letter-spacing: 0.1em;
         font-size: 0.9rem;
+    }
+
+    .section-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid var(--lcd-border);
+        padding-bottom: 10px;
+        margin-bottom: 20px;
+    }
+
+    .check-cloud-btn {
+        background: #0a1615;
+        border: 1px solid var(--lcd-border);
+        color: var(--lcd-text-soft);
+        font-family: var(--lcd-font-ui);
+        font-size: 0.78rem;
+        padding: 4px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: all 0.15s ease;
+    }
+
+    .check-cloud-btn:hover:not(:disabled) {
+        border-color: var(--lcd-text);
+        color: var(--lcd-text);
+        box-shadow: var(--lcd-glow-soft);
+    }
+
+    .check-cloud-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .spinning {
+        display: inline-block;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        to {
+            transform: rotate(360deg);
+        }
     }
 
     .grid {
@@ -269,14 +430,115 @@
     }
 
     .card-info h3 {
-        margin: 0 0 6px 0;
+        margin: 0;
         color: var(--lcd-text);
         font-size: 1.05rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .card-top-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+    }
+
+    .hash-pill {
+        font-family: var(--lcd-font-main, monospace);
+        font-size: 0.72rem;
+        color: var(--lcd-text-muted);
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 1px 6px;
+        border-radius: 3px;
+        flex-shrink: 0;
+    }
+
+    .sync-badge-row {
+        margin-bottom: 10px;
+    }
+
+    .sync-status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        border: 1px solid transparent;
+    }
+
+    .sync-status-badge.local_only {
+        background: rgba(138, 163, 153, 0.1);
+        border-color: rgba(138, 163, 153, 0.3);
+        color: var(--lcd-text-muted);
+    }
+
+    .sync-status-badge.synced {
+        background: rgba(80, 250, 123, 0.1);
+        border-color: rgba(80, 250, 123, 0.4);
+        color: #50fa7b;
+    }
+
+    .sync-status-badge.local_ahead {
+        background: rgba(255, 201, 102, 0.14);
+        border-color: #ffc966;
+        color: #ffc966;
+        box-shadow: 0 0 6px rgba(255, 201, 102, 0.2);
+    }
+
+    .sync-status-badge.cloud_ahead {
+        background: rgba(112, 214, 255, 0.14);
+        border-color: #70d6ff;
+        color: #70d6ff;
+        box-shadow: 0 0 6px rgba(112, 214, 255, 0.2);
+    }
+
+    .sync-status-badge.conflict {
+        background: rgba(255, 107, 107, 0.16);
+        border-color: #ff6b6b;
+        color: #ff8787;
+        box-shadow: 0 0 6px rgba(255, 107, 107, 0.25);
+    }
+
+    .badge-version {
+        opacity: 0.85;
+        font-size: 0.72rem;
+        margin-left: 2px;
+        padding-left: 4px;
+        border-left: 1px solid currentColor;
+    }
+
+    .card.status-local-ahead {
+        border-color: rgba(255, 201, 102, 0.45);
+    }
+
+    .card.status-cloud-ahead {
+        border-color: rgba(112, 214, 255, 0.45);
+    }
+
+    .card.status-conflict {
+        border-color: rgba(255, 107, 107, 0.55);
+    }
+
+    .dates-comparison {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
     }
 
     .card-info .date {
-        font-size: 0.8rem;
-
+        font-size: 0.78rem;
         color: var(--lcd-text-muted);
+    }
+
+    .card-info .cloud-date {
+        color: var(--lcd-text-soft);
+        opacity: 0.85;
     }
 </style>

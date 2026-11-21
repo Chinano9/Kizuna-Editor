@@ -66,6 +66,9 @@ func NewApp() *App {
 // startup is called by Wails when the application boots up.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if a.syncHandler != nil {
+		a.syncHandler.SetContext(ctx)
+	}
 	log.Println("Kizuna Editor started successfully")
 }
 
@@ -95,6 +98,46 @@ func (a *App) PushProjectToCloud(cloudURL string, token string, songID int, base
 // PullAndImportProject downloads a cloud project and unpacks/imports it into local SQLite (Issue #14).
 func (a *App) PullAndImportProject(cloudURL string, token string, projectID int) (int, error) {
 	return a.syncHandler.PullAndImportProject(cloudURL, token, projectID)
+}
+
+// ListCloudProjects fetches and locally decrypts the user's cloud projects.
+func (a *App) ListCloudProjects(cloudURL string, token string) ([]models.CloudProject, error) {
+	return a.syncHandler.ListCloudProjects(cloudURL, token)
+}
+
+// GetEncryptionKeyFingerprint returns the short SHA-256 fingerprint of the local E2EE key.
+func (a *App) GetEncryptionKeyFingerprint() string {
+	return a.syncHandler.GetEncryptionKeyFingerprint()
+}
+
+// ShareProject invites a collaborator to a remote cloud project (Issue #15).
+func (a *App) ShareProject(cloudID string, collaboratorIdentifier string) error {
+	return a.syncHandler.ShareProject(cloudID, collaboratorIdentifier)
+}
+
+// CheckoutProject requests an exclusive checkout lease on a remote cloud project (Issue #16).
+func (a *App) CheckoutProject(cloudURL string, token string, projectID int) (*models.ProjectLock, error) {
+	return a.syncHandler.CheckoutProject(cloudURL, token, projectID)
+}
+
+// ReleaseProjectLock releases an active checkout lease on a remote cloud project (Issue #22).
+func (a *App) ReleaseProjectLock(cloudURL string, token string, projectID int) error {
+	return a.syncHandler.ReleaseProjectLock(cloudURL, token, projectID)
+}
+
+// GetProjectLockStatus checks whether a remote cloud project is currently locked (Issue #16).
+func (a *App) GetProjectLockStatus(cloudURL string, token string, projectID int) (*models.ProjectLock, error) {
+	return a.syncHandler.GetProjectLockStatus(cloudURL, token, projectID)
+}
+
+// SetCloudSession configures active session parameters in the sync presentation facade.
+func (a *App) SetCloudSession(cloudURL string, token string) {
+	a.syncHandler.SetCloudSession(cloudURL, token)
+}
+
+// SetCloudProjectID maps a local SQLite song ID to its remote Kizuna Cloud project ID.
+func (a *App) SetCloudProjectID(songID int, cloudProjectID int) {
+	a.syncHandler.SetCloudProjectID(songID, cloudProjectID)
 }
 
 // --- Song Operations (Delegated to SongHandler) ---

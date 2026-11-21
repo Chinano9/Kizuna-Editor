@@ -18,6 +18,10 @@ export function AudioHandler() {
   return window['go']['main']['App']['AudioHandler']();
 }
 
+export function CheckoutProject(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CheckoutProject'](arg1, arg2, arg3);
+}
+
 export function ConvertQuickIdeaToSong(arg1, arg2) {
   return window['go']['main']['App']['ConvertQuickIdeaToSong'](arg1, arg2);
 }
@@ -66,6 +70,10 @@ export function GetCurrentDriver() {
   return window['go']['main']['App']['GetCurrentDriver']();
 }
 
+export function GetEncryptionKeyFingerprint() {
+  return window['go']['main']['App']['GetEncryptionKeyFingerprint']();
+}
+
 export function GetInputDevices() {
   return window['go']['main']['App']['GetInputDevices']();
 }
@@ -80,6 +88,10 @@ export function GetPlaybackDuration() {
 
 export function GetPlaybackPosition() {
   return window['go']['main']['App']['GetPlaybackPosition']();
+}
+
+export function GetProjectLockStatus(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetProjectLockStatus'](arg1, arg2, arg3);
 }
 
 export function GetQuickIdeas() {
@@ -98,6 +110,10 @@ export function ListAlbums() {
   return window['go']['main']['App']['ListAlbums']();
 }
 
+export function ListCloudProjects(arg1, arg2) {
+  return window['go']['main']['App']['ListCloudProjects'](arg1, arg2);
+}
+
 export function PauseAudio() {
   return window['go']['main']['App']['PauseAudio']();
 }
@@ -112,6 +128,10 @@ export function PullAndImportProject(arg1, arg2, arg3) {
 
 export function PushProjectToCloud(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['PushProjectToCloud'](arg1, arg2, arg3, arg4);
+}
+
+export function ReleaseProjectLock(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ReleaseProjectLock'](arg1, arg2, arg3);
 }
 
 export function RemoveSongFromAlbum(arg1) {
@@ -136,6 +156,18 @@ export function SetAudioDriver(arg1) {
 
 export function SetAudioVolume(arg1) {
   return window['go']['main']['App']['SetAudioVolume'](arg1);
+}
+
+export function SetCloudProjectID(arg1, arg2) {
+  return window['go']['main']['App']['SetCloudProjectID'](arg1, arg2);
+}
+
+export function SetCloudSession(arg1, arg2) {
+  return window['go']['main']['App']['SetCloudSession'](arg1, arg2);
+}
+
+export function ShareProject(arg1, arg2) {
+  return window['go']['main']['App']['ShareProject'](arg1, arg2);
 }
 
 export function SongHandler() {

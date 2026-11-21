@@ -30,6 +30,10 @@ export function RemoveSongFromAlbum(arg1) {
   return window['go']['bindings']['AlbumHandler']['RemoveSongFromAlbum'](arg1);
 }
 
+export function ReorderAlbumSongs(arg1, arg2) {
+  return window['go']['bindings']['AlbumHandler']['ReorderAlbumSongs'](arg1, arg2);
+}
+
 export function UpdateAlbum(arg1) {
   return window['go']['bindings']['AlbumHandler']['UpdateAlbum'](arg1);
 }

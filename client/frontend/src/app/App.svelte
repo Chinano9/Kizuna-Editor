@@ -10,6 +10,7 @@
     import DashboardLayout from "@/layouts/DashboardLayout.svelte";
     import EditorLayout from "@/layouts/EditorLayout.svelte";
     import ToastContainer from "@shared/components/feedback/ToastContainer.svelte";
+    import SyncProgressIndicator from "@/features/cloud-sync/components/SyncProgressIndicator.svelte";
     import "@shared/styles/global.css";
 
     // Load global metadata on startup
@@ -28,6 +29,7 @@
     {/if}
 
     <ToastContainer />
+    <SyncProgressIndicator />
 </main>
 
 <style>
