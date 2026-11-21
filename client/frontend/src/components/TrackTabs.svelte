@@ -20,10 +20,16 @@
     import { onMount, tick } from "svelte";
 
     import { activeTrackIndex } from "@/stores/trackStore";
-    import { song } from "@/stores/projectStore";
+    import { song, activeSongStore } from "@/stores/projectStore";
     import { instrumentStore } from "@/stores/instrumentStore";
+    import { syncStore, isSongReadOnly } from "@/features/cloud-sync/stores/syncStore";
     import { toastStore } from "@shared/stores/toastStore";
     import type { Instrument, Track } from "@shared/types/wails";
+
+    $: activeCloudId = Number(
+        $activeSongStore?.cloud_id || ($song?.id ? syncStore.getCloudIdForSong($song.id) : 0) || 0
+    );
+    $: isReadOnly = isSongReadOnly($syncStore, activeCloudId);
 
     import {
         AddTrack,
@@ -79,6 +85,14 @@
     }
 
     async function addTrack() {
+        if (isReadOnly) {
+            toastStore.warning(
+                $syncStore.isLockedByOther
+                    ? `Edición bloqueada por ${$syncStore.lockedBy || "otro colaborador"}.`
+                    : "Adquiere el candado ('🔒 Editar') antes de añadir pistas."
+            );
+            return;
+        }
         if (!$song) return;
 
         try {
@@ -105,6 +119,7 @@
     }
 
     async function startEditing(index: number, currentName: string) {
+        if (isReadOnly) return;
         editingIndex = index;
         editingName = currentName;
 
@@ -162,6 +177,15 @@
     }
 
     async function deleteTrack(index: number) {
+        if (isReadOnly) {
+            toastStore.warning(
+                $syncStore.isLockedByOther
+                    ? `Edición bloqueada por ${$syncStore.lockedBy || "otro colaborador"}.`
+                    : "Adquiere el candado ('🔒 Editar') antes de eliminar pistas."
+            );
+            return;
+        }
+        if (!confirm("Are you sure you want to delete this track?")) return;
         if (!$song || !$song.tracks) return;
 
         const trackToDelete = $song.tracks[index];
@@ -252,6 +276,7 @@
                     <select
                         class="instrument-select"
                         bind:value={track.instrument_id}
+                        disabled={isReadOnly}
                         on:change={() => handleInstrumentChange(track)}
                         on:click|stopPropagation
                     >
@@ -262,20 +287,31 @@
                         {/each}
                     </select>
 
-                    <button
-                        class="delete-btn"
-                        title="Delete track"
-                        aria-label={`Delete ${track.name || `Track ${i + 1}`}`}
-                        on:click|stopPropagation={() => deleteTrack(i)}
-                    >
-                        &times;
-                    </button>
+                    {#if !isReadOnly}
+                        <button
+                            class="delete-btn"
+                            title="Delete track"
+                            aria-label={`Delete ${track.name || `Track ${i + 1}`}`}
+                            on:click|stopPropagation={() => deleteTrack(i)}
+                        >
+                            &times;
+                        </button>
+                    {/if}
                 {/if}
             </div>
         {/each}
     {/if}
 
-    <button class="add-track-btn" on:click={addTrack}>+</button>
+    <button
+        class="add-track-btn"
+        disabled={isReadOnly}
+        on:click={addTrack}
+        title={isReadOnly
+            ? $syncStore.isLockedByOther
+                ? `Bloqueado por ${$syncStore.lockedBy || "otro colaborador"}`
+                : "Haz clic en '🔒 Editar (Check-out)' para desbloquear la edición"
+            : "Add Track"}
+    >+</button>
 
     <div class="spacer" />
 </div>

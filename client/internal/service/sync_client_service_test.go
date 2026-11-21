@@ -740,3 +740,240 @@ func TestSyncClientService_ShareProject(t *testing.T) {
 		}
 	})
 }
+
+func TestSyncClientService_CheckoutAndReleaseLock(t *testing.T) {
+	db := setupSyncTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+
+	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+
+	t.Run("CheckoutProject acquires lock successfully (HTTP 200)", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/projects/1001/checkout" || r.Method != http.MethodPost {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": models.ProjectLock{
+					ProjectID: 1001,
+					UserID:    "usr_1",
+					Username:  "alice",
+				},
+			})
+		}))
+		defer mockServer.Close()
+
+		lock, err := svc.CheckoutProject(ctx, mockServer.URL, "valid.token", 1001)
+		if err != nil {
+			t.Fatalf("unexpected error checking out project: %v", err)
+		}
+		if lock == nil || lock.Username != "alice" || lock.ProjectID != 1001 {
+			t.Errorf("unexpected lock response: %+v", lock)
+		}
+	})
+
+	t.Run("CheckoutProject returns error when locked by another user (HTTP 409)", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error": map[string]interface{}{
+					"code":    409,
+					"message": "project is currently checked out by another user: user 'bob' holds the lock",
+					"details": "bob",
+				},
+			})
+		}))
+		defer mockServer.Close()
+
+		_, err := svc.CheckoutProject(ctx, mockServer.URL, "valid.token", 1001)
+		if err == nil || !strings.Contains(err.Error(), "bob") {
+			t.Fatalf("expected conflict error mentioning bob, got %v", err)
+		}
+	})
+
+	t.Run("ReleaseProjectLock releases lock successfully (HTTP 200)", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/projects/1001/release" || r.Method != http.MethodPost {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+			})
+		}))
+		defer mockServer.Close()
+
+		err := svc.ReleaseProjectLock(ctx, mockServer.URL, "valid.token", 1001)
+		if err != nil {
+			t.Fatalf("unexpected error releasing project lock: %v", err)
+		}
+	})
+
+	t.Run("ReleaseProjectLock returns error when user does not hold lock (HTTP 403)", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+			})
+		}))
+		defer mockServer.Close()
+
+		err := svc.ReleaseProjectLock(ctx, mockServer.URL, "valid.token", 1001)
+		if err == nil || !strings.Contains(err.Error(), "no posees el candado activo") {
+			t.Fatalf("expected forbidden lock error, got %v", err)
+		}
+	})
+
+	t.Run("GetProjectLockStatus returns active lock if present", func(t *testing.T) {
+		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/projects/1001" {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": true,
+				"data": models.CloudProject{
+					ID:    1001,
+					Title: "Shared Song",
+					ActiveLock: &models.ProjectLock{
+						ProjectID: 1001,
+						UserID:    "usr_2",
+						Username:  "charlie",
+					},
+				},
+			})
+		}))
+		defer mockServer.Close()
+
+		lock, err := svc.GetProjectLockStatus(ctx, mockServer.URL, "valid.token", 1001)
+		if err != nil {
+			t.Fatalf("unexpected error querying lock status: %v", err)
+		}
+		if lock == nil || lock.Username != "charlie" {
+			t.Errorf("expected active lock for charlie, got %+v", lock)
+		}
+	})
+
+	t.Run("SetCloudProjectID maps local song ID to remote cloud project ID in PackageProject", func(t *testing.T) {
+		song := &models.Song{
+			Title:         "Local-First Mapping Test",
+			BPM:           110,
+			TimeSignature: "4/4",
+		}
+		localSongID, err := songRepo.Create(ctx, nil, song)
+		if err != nil {
+			t.Fatalf("failed to create local song: %v", err)
+		}
+
+		// Map local SQLite ID (e.g. 1) to remote Kizuna Cloud ID (e.g. 1001)
+		svc.SetCloudProjectID(localSongID, 1001)
+
+		payload, err := svc.PackageProject(ctx, localSongID, 2)
+		if err != nil {
+			t.Fatalf("failed to package project: %v", err)
+		}
+		if payload.ProjectID != 1001 {
+			t.Errorf("expected packaged ProjectID to use mapped cloud ID 1001, got %d", payload.ProjectID)
+		}
+	})
+
+	t.Run("CheckoutProject returns connectivity error when offline for Local-First fallback", func(t *testing.T) {
+		_, err := svc.CheckoutProject(ctx, "http://127.0.0.1:54322", "valid.token", 1001)
+		if err == nil || !strings.Contains(err.Error(), "no se pudo conectar con Kizuna Cloud") {
+			t.Fatalf("expected network connectivity error when offline, got %v", err)
+		}
+	})
+}
+
+func TestSyncClientService_ImportCloudProject_Idempotent(t *testing.T) {
+	db := setupSyncTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	songRepo := repository.NewSongRepository(db)
+	trackRepo := repository.NewTrackRepository(db)
+	audioRepo := repository.NewAudioRepository(db)
+	svc := NewSyncClientService(songRepo, trackRepo, audioRepo)
+
+	// 1. Initial import of cloud project 1001
+	cloudProj1 := &models.CloudProject{
+		ID:            1001,
+		Title:         "Highway Star",
+		BPM:           130,
+		TimeSignature: "4/4",
+		Tracks: []models.Track{
+			{InstrumentID: 1, Name: "Guitar Solo", DataContent: "E4-G4-A4"},
+		},
+	}
+
+	songID1, err := svc.ImportCloudProject(ctx, cloudProj1)
+	if err != nil {
+		t.Fatalf("failed first import: %v", err)
+	}
+	if songID1 <= 0 {
+		t.Fatalf("expected valid song ID, got %d", songID1)
+	}
+
+	// 2. Second import of the SAME cloud project 1001 (e.g. user does Pull again)
+	cloudProj2 := &models.CloudProject{
+		ID:            1001,
+		Title:         "Highway Star (Remastered)",
+		BPM:           132,
+		TimeSignature: "4/4",
+		Tracks: []models.Track{
+			{InstrumentID: 1, Name: "Guitar Solo V2", DataContent: "E4-G4-A4-B4"},
+			{InstrumentID: 2, Name: "Bass", DataContent: "E2-E2"},
+		},
+	}
+
+	songID2, err := svc.ImportCloudProject(ctx, cloudProj2)
+	if err != nil {
+		t.Fatalf("failed second import: %v", err)
+	}
+
+	// Verify idempotency: should update songID1, NOT create a new song
+	if songID2 != songID1 {
+		t.Errorf("expected idempotent import to return existing song ID %d, got %d", songID1, songID2)
+	}
+
+	// Verify updated metadata
+	updatedSong, err := songRepo.GetByID(ctx, songID1)
+	if err != nil {
+		t.Fatalf("failed to fetch updated song: %v", err)
+	}
+	if updatedSong.Title != "Highway Star (Remastered)" {
+		t.Errorf("expected updated title 'Highway Star (Remastered)', got %s", updatedSong.Title)
+	}
+	if updatedSong.BPM != 132 {
+		t.Errorf("expected updated BPM 132, got %d", updatedSong.BPM)
+	}
+
+	// Verify tracks were replaced properly
+	tracks, err := trackRepo.GetBySongID(ctx, songID1)
+	if err != nil {
+		t.Fatalf("failed to fetch tracks: %v", err)
+	}
+	if len(tracks) != 2 {
+		t.Errorf("expected 2 updated tracks, got %d", len(tracks))
+	}
+
+	// Verify total count in songs table is exactly 1 (no duplicates!)
+	recent, err := songRepo.GetRecent(ctx, 100)
+	if err != nil {
+		t.Fatalf("failed to get recent songs: %v", err)
+	}
+	if len(recent) != 1 {
+		t.Errorf("expected exactly 1 song in database, found %d", len(recent))
+	}
+}

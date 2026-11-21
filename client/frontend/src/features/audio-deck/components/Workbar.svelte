@@ -25,8 +25,9 @@
     import { formatTime } from "@shared/lib/formatters";
     import { looksLikeAlphaTex, parsePlayableNotesFromAlphaTex } from "@shared/lib/musicUtils";
     import { toastStore } from "@shared/stores/toastStore";
-    import { song } from "@/stores/projectStore";
+    import { song, activeSongStore } from "@/stores/projectStore";
     import { audioPlayerStore } from "../stores/audioPlayerStore";
+    import { syncStore, isSongReadOnly } from "@/features/cloud-sync/stores/syncStore";
 
     import HardwareDeck from "./HardwareDeck.svelte";
     import SessionTimeDisplay from "./SessionTimeDisplay.svelte";
@@ -44,6 +45,11 @@
         playbackUpdate: { position: number; duration: number; isPlaying: boolean };
         playStateChange: boolean;
     }>();
+
+    $: activeCloudId = Number(
+        $activeSongStore?.cloud_id || ($song?.id ? syncStore.getCloudIdForSong($song.id) : 0) || 0
+    );
+    $: isReadOnly = isSongReadOnly($syncStore, activeCloudId);
 
     // --- State Machine ---
     let isRecording = false;
@@ -328,6 +334,14 @@
     // --- Recording Control ---
     async function toggleRecording() {
         if (!isRecording) {
+            if (isReadOnly) {
+                toastStore.warning(
+                    $syncStore.isLockedByOther
+                        ? `Grabación bloqueada: ${$syncStore.lockedBy || "otro colaborador"} está editando este proyecto.`
+                        : "Adquiere el candado ('🔒 Editar') antes de grabar nuevas tomas en este proyecto."
+                );
+                return;
+            }
             try {
                 if (isPlaying) {
                     await togglePlay();
@@ -617,6 +631,7 @@
         <TransportControls
             {isRecording}
             {isPlaying}
+            isLocked={isReadOnly}
             hasSelectedTake={!!selectedTakePath || hasPlayableScore}
             on:togglePlay={togglePlay}
             on:toggleRecord={toggleRecording}

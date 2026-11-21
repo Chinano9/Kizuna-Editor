@@ -18,6 +18,10 @@ export function AudioHandler() {
   return window['go']['main']['App']['AudioHandler']();
 }
 
+export function CheckoutProject(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CheckoutProject'](arg1, arg2, arg3);
+}
+
 export function ConvertQuickIdeaToSong(arg1, arg2) {
   return window['go']['main']['App']['ConvertQuickIdeaToSong'](arg1, arg2);
 }
@@ -86,6 +90,10 @@ export function GetPlaybackPosition() {
   return window['go']['main']['App']['GetPlaybackPosition']();
 }
 
+export function GetProjectLockStatus(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetProjectLockStatus'](arg1, arg2, arg3);
+}
+
 export function GetQuickIdeas() {
   return window['go']['main']['App']['GetQuickIdeas']();
 }
@@ -122,6 +130,10 @@ export function PushProjectToCloud(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['PushProjectToCloud'](arg1, arg2, arg3, arg4);
 }
 
+export function ReleaseProjectLock(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ReleaseProjectLock'](arg1, arg2, arg3);
+}
+
 export function RemoveSongFromAlbum(arg1) {
   return window['go']['main']['App']['RemoveSongFromAlbum'](arg1);
 }
@@ -144,6 +156,10 @@ export function SetAudioDriver(arg1) {
 
 export function SetAudioVolume(arg1) {
   return window['go']['main']['App']['SetAudioVolume'](arg1);
+}
+
+export function SetCloudProjectID(arg1, arg2) {
+  return window['go']['main']['App']['SetCloudProjectID'](arg1, arg2);
 }
 
 export function SetCloudSession(arg1, arg2) {

@@ -12,6 +12,8 @@ export function AssignSongToAlbum(arg1:number,arg2:number):Promise<void>;
 
 export function AudioHandler():Promise<bindings.AudioHandler>;
 
+export function CheckoutProject(arg1:string,arg2:string,arg3:number):Promise<models.ProjectLock>;
+
 export function ConvertQuickIdeaToSong(arg1:number,arg2:string):Promise<number>;
 
 export function CreateAlbum(arg1:string,arg2:string,arg3:string):Promise<models.Album>;
@@ -46,6 +48,8 @@ export function GetPlaybackDuration():Promise<number>;
 
 export function GetPlaybackPosition():Promise<number>;
 
+export function GetProjectLockStatus(arg1:string,arg2:string,arg3:number):Promise<models.ProjectLock>;
+
 export function GetQuickIdeas():Promise<Array<models.QuickIdea>>;
 
 export function GetRecentSongs():Promise<Array<models.Song>>;
@@ -64,6 +68,8 @@ export function PullAndImportProject(arg1:string,arg2:string,arg3:number):Promis
 
 export function PushProjectToCloud(arg1:string,arg2:string,arg3:number,arg4:number):Promise<models.CloudPushResult>;
 
+export function ReleaseProjectLock(arg1:string,arg2:string,arg3:number):Promise<void>;
+
 export function RemoveSongFromAlbum(arg1:number):Promise<void>;
 
 export function SaveQuickIdea(arg1:number,arg2:string,arg3:string):Promise<number>;
@@ -75,6 +81,8 @@ export function SeekAudio(arg1:number):Promise<void>;
 export function SetAudioDriver(arg1:string):Promise<void>;
 
 export function SetAudioVolume(arg1:number):Promise<void>;
+
+export function SetCloudProjectID(arg1:number,arg2:number):Promise<void>;
 
 export function SetCloudSession(arg1:string,arg2:string):Promise<void>;
 

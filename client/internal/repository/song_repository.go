@@ -114,16 +114,79 @@ func (r *SQLiteSongRepository) GetByID(ctx context.Context, id int) (*models.Son
 		s.KeySignature = ""
 	}
 
+	r.populateContentHash(ctx, &s)
+
 	return &s, nil
 }
 
-// GetRecent returns the most recently updated songs up to the requested limit.
+// populateContentHash computes the deterministic SHA-256 content hash for a song from SQLite tracks and audio versions.
+func (r *SQLiteSongRepository) populateContentHash(ctx context.Context, s *models.Song) {
+	if s == nil || s.ID <= 0 {
+		return
+	}
+
+	tracks := make([]models.Track, 0)
+	trackRows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id, song_id, instrument_id, name, data_content, display_mode, is_muted, created_at
+		 FROM tracks WHERE song_id = ? ORDER BY id ASC`,
+		s.ID,
+	)
+	if err == nil {
+		for trackRows.Next() {
+			var t models.Track
+			if err := trackRows.Scan(
+				&t.ID, &t.SongID, &t.InstrumentID, &t.Name, &t.DataContent, &t.DisplayMode, &t.IsMuted, &t.CreatedAt,
+			); err == nil {
+				tracks = append(tracks, t)
+			}
+		}
+		_ = trackRows.Close()
+	}
+
+	takes := make([]models.AudioVersion, 0)
+	audioRows, err := r.db.QueryContext(
+		ctx,
+		`SELECT id, song_id, track_id, version_name, file_path, notes, created_at
+		 FROM audio_versions WHERE song_id = ? ORDER BY created_at DESC`,
+		s.ID,
+	)
+	if err == nil {
+		for audioRows.Next() {
+			var av models.AudioVersion
+			var trackIDNull sql.NullInt64
+			if err := audioRows.Scan(
+				&av.ID, &av.SongID, &trackIDNull, &av.VersionName, &av.FilePath, &av.Notes, &av.CreatedAt,
+			); err == nil {
+				if trackIDNull.Valid {
+					val := int(trackIDNull.Int64)
+					av.TrackID = &val
+				}
+				takes = append(takes, av)
+			}
+		}
+		_ = audioRows.Close()
+	}
+
+	s.ContentHash = models.ComputeProjectHash(
+		s.Title,
+		s.BPM,
+		s.TimeSignature,
+		s.KeySignature,
+		tracks,
+		takes,
+	)
+}
+
+// GetRecent returns the most recently updated songs up to the requested limit, including their computed ContentHash.
 func (r *SQLiteSongRepository) GetRecent(ctx context.Context, limit int) ([]models.Song, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
-	query := `SELECT id, title, updated_at FROM songs ORDER BY updated_at DESC LIMIT ?`
+	query := `
+		SELECT id, album_id, title, bpm, time_signature, key_signature, created_at, updated_at
+		FROM songs ORDER BY updated_at DESC LIMIT ?`
 	rows, err := r.db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query recent songs: %w", err)
@@ -133,11 +196,27 @@ func (r *SQLiteSongRepository) GetRecent(ctx context.Context, limit int) ([]mode
 	songs := make([]models.Song, 0)
 	for rows.Next() {
 		var s models.Song
-		if err := rows.Scan(&s.ID, &s.Title, &s.UpdatedAt); err != nil {
+		var ts, ks sql.NullString
+		if err := rows.Scan(
+			&s.ID, &s.AlbumID, &s.Title, &s.BPM, &ts, &ks, &s.CreatedAt, &s.UpdatedAt,
+		); err != nil {
 			continue
+		}
+		if ts.Valid {
+			s.TimeSignature = ts.String
+		} else {
+			s.TimeSignature = "4/4"
+		}
+		if ks.Valid {
+			s.KeySignature = ks.String
 		}
 		songs = append(songs, s)
 	}
+
+	for i := range songs {
+		r.populateContentHash(ctx, &songs[i])
+	}
+
 	return songs, nil
 }
 

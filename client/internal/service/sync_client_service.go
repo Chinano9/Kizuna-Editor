@@ -141,7 +141,7 @@ func (pr *progressReader) emitProgress(phase string, current, total int64, perce
 
 const MaskedCloudTitle = "[E2EE] Encrypted Project"
 
-// SyncClientService coordinates local project packaging, E2EE encryption/decryption, cloud synchronization, and resilient retries (Issues #13, #14, #23).
+// SyncClientService coordinates local project packaging, E2EE encryption/decryption, cloud synchronization, and resilient retries (Issues #13, #14, #16, #22, #23).
 type SyncClientService struct {
 	songRepo      repository.SongRepository
 	trackRepo     repository.TrackRepository
@@ -151,6 +151,7 @@ type SyncClientService struct {
 	eventEmitter  EventEmitter
 	mu            sync.RWMutex
 	encryptionKey []byte
+	cloudIDMu     sync.RWMutex
 	cloudIDMap    map[int]int
 }
 
@@ -178,6 +179,44 @@ func NewSyncClientService(
 		retryDelays:  []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second},
 		eventEmitter: defaultEventEmitter,
 	}
+}
+
+// SetCloudProjectID associates a local SQLite song ID with its remote Kizuna Cloud project ID.
+func (s *SyncClientService) SetCloudProjectID(localSongID int, cloudProjectID int) {
+	if localSongID <= 0 || cloudProjectID <= 0 {
+		return
+	}
+	s.cloudIDMu.Lock()
+	defer s.cloudIDMu.Unlock()
+	if s.cloudIDMap == nil {
+		s.cloudIDMap = make(map[int]int)
+	}
+	s.cloudIDMap[localSongID] = cloudProjectID
+}
+
+// GetCloudProjectID resolves the remote Kizuna Cloud project ID mapped to a local SQLite song ID.
+func (s *SyncClientService) GetCloudProjectID(localSongID int) int {
+	s.cloudIDMu.RLock()
+	defer s.cloudIDMu.RUnlock()
+	if s.cloudIDMap == nil {
+		return 0
+	}
+	return s.cloudIDMap[localSongID]
+}
+
+// FindLocalSongIDByCloudProjectID resolves the local SQLite song ID mapped to a remote Kizuna Cloud project ID.
+func (s *SyncClientService) FindLocalSongIDByCloudProjectID(cloudProjectID int) int {
+	if cloudProjectID <= 0 {
+		return 0
+	}
+	s.cloudIDMu.RLock()
+	defer s.cloudIDMu.RUnlock()
+	for localID, remoteID := range s.cloudIDMap {
+		if remoteID == cloudProjectID {
+			return localID
+		}
+	}
+	return 0
 }
 
 // SetEventEmitter overrides the event emitter (useful for unit testing).
@@ -350,8 +389,21 @@ func (s *SyncClientService) PackageProject(ctx context.Context, songID int, base
 
 	cloudProjID := 0
 	if baseVersion > 0 {
-		cloudProjID = song.ID
+		if mappedID := s.GetCloudProjectID(songID); mappedID > 0 {
+			cloudProjID = mappedID
+		} else {
+			cloudProjID = song.ID
+		}
 	}
+
+	contentHash := models.ComputeProjectHash(
+		song.Title,
+		song.BPM,
+		song.TimeSignature,
+		song.KeySignature,
+		tracks,
+		audioVersions,
+	)
 
 	return &models.CloudPushPayload{
 		ProjectID:        cloudProjID,
@@ -360,6 +412,7 @@ func (s *SyncClientService) PackageProject(ctx context.Context, songID int, base
 		TimeSignature:    song.TimeSignature,
 		KeySignature:     song.KeySignature,
 		BaseVersion:      baseVersion,
+		ContentHash:      contentHash,
 		Tracks:           tracks,
 		AudioVersions:    audioVersions,
 		EncryptedPayload: ciphertext,
@@ -566,6 +619,10 @@ func (s *SyncClientService) executeEncryptedPush(
 		return nil, fmt.Errorf("server returned empty data in response")
 	}
 
+	if apiResp.Data.ProjectID > 0 {
+		s.SetCloudProjectID(songID, apiResp.Data.ProjectID)
+	}
+
 	if pr != nil {
 		pr.emitProgress("completed", totalBytes, totalBytes, 100.0)
 	}
@@ -617,6 +674,8 @@ func (s *SyncClientService) DecryptCloudProject(cp *models.CloudProject) (*model
 
 // ImportCloudProject decrypts (if encrypted) and imports a pulled cloud project into local SQLite tables
 // and writes any embedded .wav audio files to local disk (Issue #14).
+// If this cloud project was previously imported locally, it updates the existing song in-place
+// instead of creating duplicate records in SQLite.
 func (s *SyncClientService) ImportCloudProject(ctx context.Context, cp *models.CloudProject) (int, error) {
 	if cp == nil {
 		return 0, fmt.Errorf("cloud project cannot be nil")
@@ -632,22 +691,46 @@ func (s *SyncClientService) ImportCloudProject(ctx context.Context, cp *models.C
 		title = "Imported Cloud Project"
 	}
 
-	song := &models.Song{
-		Title:         title,
-		BPM:           cp.BPM,
-		TimeSignature: cp.TimeSignature,
-		KeySignature:  cp.KeySignature,
+	bpm := cp.BPM
+	if bpm <= 0 {
+		bpm = 120
 	}
-	if song.BPM <= 0 {
-		song.BPM = 120
-	}
-	if song.TimeSignature == "" {
-		song.TimeSignature = "4/4"
+	timeSig := cp.TimeSignature
+	if timeSig == "" {
+		timeSig = "4/4"
 	}
 
-	songID, err := s.songRepo.Create(ctx, nil, song)
-	if err != nil {
-		return 0, fmt.Errorf("failed to create local song: %w", err)
+	var songID int
+	existingLocalID := s.FindLocalSongIDByCloudProjectID(cp.ID)
+	if existingLocalID > 0 {
+		// Verify existing song in SQLite
+		if existingSong, err := s.songRepo.GetByID(ctx, existingLocalID); err == nil && existingSong != nil {
+			existingSong.Title = title
+			existingSong.BPM = bpm
+			existingSong.TimeSignature = timeSig
+			existingSong.KeySignature = cp.KeySignature
+			if err := s.songRepo.Update(ctx, nil, existingSong); err != nil {
+				return 0, fmt.Errorf("failed to update local song: %w", err)
+			}
+			songID = existingLocalID
+			// Clean existing tracks before re-inserting
+			_ = s.trackRepo.DeleteBySongIDExcept(ctx, nil, songID, nil)
+		}
+	}
+
+	if songID == 0 {
+		song := &models.Song{
+			Title:         title,
+			BPM:           bpm,
+			TimeSignature: timeSig,
+			KeySignature:  cp.KeySignature,
+		}
+
+		newSongID, err := s.songRepo.Create(ctx, nil, song)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create local song: %w", err)
+		}
+		songID = newSongID
 	}
 
 	// Restore any embedded .wav files to local disk and remap paths for the imported song
@@ -699,7 +782,22 @@ func (s *SyncClientService) ImportCloudProject(ctx context.Context, cp *models.C
 		}
 	}
 
+	var existingTakes []models.AudioVersion
+	if existingLocalID > 0 {
+		existingTakes, _ = s.audioRepo.GetBySongID(ctx, songID)
+	}
+
 	for _, av := range audioVersionsToImport {
+		alreadyExists := false
+		for _, ex := range existingTakes {
+			if (ex.FilePath != "" && ex.FilePath == av.FilePath) || (ex.VersionName != "" && ex.VersionName == av.VersionName) {
+				alreadyExists = true
+				break
+			}
+		}
+		if alreadyExists {
+			continue
+		}
 		newAV := &models.AudioVersion{
 			SongID:      songID,
 			VersionName: av.VersionName,
@@ -707,6 +805,10 @@ func (s *SyncClientService) ImportCloudProject(ctx context.Context, cp *models.C
 			Notes:       av.Notes,
 		}
 		_, _ = s.audioRepo.Create(ctx, newAV)
+	}
+
+	if cp.ID > 0 {
+		s.SetCloudProjectID(songID, cp.ID)
 	}
 
 	return songID, nil
@@ -814,6 +916,10 @@ func (s *SyncClientService) PullProjectFromCloud(
 		return nil, 0, fmt.Errorf("server returned empty data for project %d", projectID)
 	}
 
+	if apiResp.Data.ID <= 0 && projectID > 0 {
+		apiResp.Data.ID = projectID
+	}
+
 	reader.emitProgress("completed", reader.transferred, reader.transferred, 100.0)
 
 	localSongID, err := s.ImportCloudProject(ctx, apiResp.Data)
@@ -821,9 +927,9 @@ func (s *SyncClientService) PullProjectFromCloud(
 		return nil, 0, fmt.Errorf("failed to import cloud project into local database: %w", err)
 	}
 
-	s.mu.Lock()
-	s.cloudIDMap[localSongID] = projectID
-	s.mu.Unlock()
+	if localSongID > 0 && projectID > 0 {
+		s.SetCloudProjectID(localSongID, projectID)
+	}
 
 	return apiResp.Data, localSongID, nil
 }
@@ -951,4 +1057,185 @@ func (s *SyncClientService) ShareProject(
 		return fmt.Errorf("error del servidor Kizuna Cloud (HTTP %d)", resp.StatusCode)
 	}
 }
+
+// CheckoutProject requests an exclusive checkout lock on a cloud project before editing or syncing (Issue #16).
+func (s *SyncClientService) CheckoutProject(
+	ctx context.Context,
+	cloudURL string,
+	token string,
+	projectID int,
+) (*models.ProjectLock, error) {
+	if projectID <= 0 {
+		return nil, errors.New("el identificador del proyecto remoto es inválido")
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("sesión expirada: inicia sesión en Kizuna Cloud para bloquear el proyecto")
+	}
+	if strings.TrimSpace(cloudURL) == "" {
+		cloudURL = "http://localhost:8080"
+	}
+
+	endpoint := fmt.Sprintf("%s/api/v1/projects/%d/checkout", strings.TrimRight(cloudURL, "/"), projectID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error creando petición de check-out: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo conectar con Kizuna Cloud: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var apiResp struct {
+		Success bool                `json:"success"`
+		Data    *models.ProjectLock `json:"data,omitempty"`
+		Error   *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+			Details string `json:"details"`
+		} `json:"error,omitempty"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("respuesta inválida del servidor (HTTP %d): %w", resp.StatusCode, err)
+	}
+
+	if resp.StatusCode == http.StatusConflict {
+		msg := "project is currently checked out by another user"
+		if apiResp.Error != nil && apiResp.Error.Message != "" {
+			msg = apiResp.Error.Message
+		}
+		return nil, errors.New(msg)
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, errors.New("sesión no autorizada en Kizuna Cloud")
+	}
+
+	if !apiResp.Success || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := fmt.Sprintf("error al solicitar candado (HTTP %d)", resp.StatusCode)
+		if apiResp.Error != nil && apiResp.Error.Message != "" {
+			msg = apiResp.Error.Message
+		}
+		return nil, errors.New(msg)
+	}
+
+	return apiResp.Data, nil
+}
+
+// ReleaseProjectLock releases an active checkout lease on a cloud project (Issue #22).
+func (s *SyncClientService) ReleaseProjectLock(
+	ctx context.Context,
+	cloudURL string,
+	token string,
+	projectID int,
+) error {
+	if projectID <= 0 {
+		return errors.New("el identificador del proyecto remoto es inválido")
+	}
+	if strings.TrimSpace(token) == "" {
+		return errors.New("sesión expirada: inicia sesión en Kizuna Cloud para liberar el candado")
+	}
+	if strings.TrimSpace(cloudURL) == "" {
+		cloudURL = "http://localhost:8080"
+	}
+
+	endpoint := fmt.Sprintf("%s/api/v1/projects/%d/release", strings.TrimRight(cloudURL, "/"), projectID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("error creando petición de liberación: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("no se pudo conectar con Kizuna Cloud: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent:
+		return nil
+	case http.StatusUnauthorized:
+		return errors.New("sesión no autorizada en Kizuna Cloud")
+	case http.StatusForbidden:
+		return errors.New("no posees el candado activo de este proyecto")
+	default:
+		var apiResp struct {
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error,omitempty"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&apiResp)
+		if apiResp.Error != nil && apiResp.Error.Message != "" {
+			return errors.New(apiResp.Error.Message)
+		}
+		return fmt.Errorf("error del servidor Kizuna Cloud al liberar candado (HTTP %d)", resp.StatusCode)
+	}
+}
+
+// GetProjectLockStatus queries Kizuna Cloud to check if a project is currently locked (Issue #16).
+func (s *SyncClientService) GetProjectLockStatus(
+	ctx context.Context,
+	cloudURL string,
+	token string,
+	projectID int,
+) (*models.ProjectLock, error) {
+	if projectID <= 0 {
+		return nil, errors.New("el identificador del proyecto remoto es inválido")
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("sesión expirada: inicia sesión en Kizuna Cloud")
+	}
+	if strings.TrimSpace(cloudURL) == "" {
+		cloudURL = "http://localhost:8080"
+	}
+
+	endpoint := fmt.Sprintf("%s/api/v1/projects/%d", strings.TrimRight(cloudURL, "/"), projectID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error creando petición de estado de proyecto: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo conectar con Kizuna Cloud: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var apiResp struct {
+		Success bool                 `json:"success"`
+		Data    *models.CloudProject `json:"data,omitempty"`
+		Error   *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("respuesta inválida del servidor (HTTP %d): %w", resp.StatusCode, err)
+	}
+
+	if !apiResp.Success || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := fmt.Sprintf("error al consultar estado del proyecto (HTTP %d)", resp.StatusCode)
+		if apiResp.Error != nil && apiResp.Error.Message != "" {
+			msg = apiResp.Error.Message
+		}
+		return nil, errors.New(msg)
+	}
+
+	if apiResp.Data == nil {
+		return nil, nil
+	}
+
+	return apiResp.Data.ActiveLock, nil
 }

@@ -275,6 +275,8 @@ export namespace models {
 	    // Go type: time
 	    synced_at: any;
 	    status: string;
+	    content_hash?: string;
+	    lock_released?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new CloudPushResult(source);
@@ -286,6 +288,8 @@ export namespace models {
 	        this.new_version = source["new_version"];
 	        this.synced_at = this.convertValues(source["synced_at"], null);
 	        this.status = source["status"];
+	        this.content_hash = source["content_hash"];
+	        this.lock_released = source["lock_released"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -323,6 +327,46 @@ export namespace models {
 	        this.type = source["type"];
 	        this.default_clef = source["default_clef"];
 	    }
+	}
+	export class ProjectLock {
+	    project_id: number;
+	    user_id: string;
+	    username: string;
+	    // Go type: time
+	    acquired_at: any;
+	    // Go type: time
+	    expires_at: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProjectLock(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project_id = source["project_id"];
+	        this.user_id = source["user_id"];
+	        this.username = source["username"];
+	        this.acquired_at = this.convertValues(source["acquired_at"], null);
+	        this.expires_at = this.convertValues(source["expires_at"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class QuickIdea {
 	    id: number;
@@ -373,6 +417,7 @@ export namespace models {
 	    // Go type: time
 	    updated_at: any;
 	    tracks?: Track[];
+	    content_hash?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Song(source);
@@ -389,6 +434,7 @@ export namespace models {
 	        this.created_at = this.convertValues(source["created_at"], null);
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	        this.tracks = this.convertValues(source["tracks"], Track);
+	        this.content_hash = source["content_hash"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

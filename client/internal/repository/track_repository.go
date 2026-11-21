@@ -83,6 +83,15 @@ func (r *SQLiteTrackRepository) Create(ctx context.Context, tx *sql.Tx, track *m
 		return 0, fmt.Errorf("get last insert id (track): %w", err)
 	}
 
+	if track.SongID > 0 {
+		touchQuery := `UPDATE songs SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+		if tx != nil {
+			_, _ = tx.ExecContext(ctx, touchQuery, track.SongID)
+		} else {
+			_, _ = r.db.ExecContext(ctx, touchQuery, track.SongID)
+		}
+	}
+
 	return int(newID), nil
 }
 
@@ -156,11 +165,22 @@ func (r *SQLiteTrackRepository) Update(ctx context.Context, tx *sql.Tx, track *m
 	if err != nil {
 		return fmt.Errorf("update track %d: %w", track.ID, err)
 	}
+
+	touchQuery := `UPDATE songs SET updated_at = CURRENT_TIMESTAMP WHERE id = (SELECT song_id FROM tracks WHERE id = ?)`
+	if tx != nil {
+		_, _ = tx.ExecContext(ctx, touchQuery, track.ID)
+	} else {
+		_, _ = r.db.ExecContext(ctx, touchQuery, track.ID)
+	}
 	return nil
 }
 
-// Delete removes a track by its ID and deletes any associated physical .wav files on disk.
+// Delete removes a track by its ID, updates the parent song's updated_at timestamp,
+// and deletes any associated physical .wav files on disk.
 func (r *SQLiteTrackRepository) Delete(ctx context.Context, id int) error {
+	var songID int
+	_ = r.db.QueryRowContext(ctx, "SELECT song_id FROM tracks WHERE id = ?", id).Scan(&songID)
+
 	audioPaths, err := r.collectTrackAudioFiles(ctx, nil, []int{id})
 	if err != nil {
 		return fmt.Errorf("collect audio files for track %d: %w", id, err)
@@ -169,6 +189,10 @@ func (r *SQLiteTrackRepository) Delete(ctx context.Context, id int) error {
 	_, err = r.db.ExecContext(ctx, "DELETE FROM tracks WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("delete track %d: %w", id, err)
+	}
+
+	if songID > 0 {
+		_, _ = r.db.ExecContext(ctx, "UPDATE songs SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", songID)
 	}
 
 	if err := r.removeUnreferencedAudioFiles(ctx, nil, audioPaths); err != nil {

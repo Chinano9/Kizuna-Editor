@@ -209,6 +209,11 @@ func (s *SongService) SaveSong(ctx context.Context, song *models.Song) (*models.
 		return nil, fmt.Errorf("commit transaction: %w", err)
 	}
 
+	// Reload from SQLite to include updated_at timestamp and computed ContentHash (Issue #21)
+	if refreshed, err := s.GetSong(ctx, song.ID); err == nil && refreshed != nil {
+		return refreshed, nil
+	}
+
 	return song, nil
 }
 

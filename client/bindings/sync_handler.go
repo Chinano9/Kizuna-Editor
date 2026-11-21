@@ -55,6 +55,13 @@ func (h *SyncHandler) SetCloudSession(cloudURL string, token string) {
 	h.lastToken = token
 }
 
+// SetCloudProjectID maps a local SQLite song ID to its remote Kizuna Cloud project ID.
+func (h *SyncHandler) SetCloudProjectID(songID int, cloudProjectID int) {
+	if h.syncService != nil {
+		h.syncService.SetCloudProjectID(songID, cloudProjectID)
+	}
+}
+
 // PushProjectToCloud packages local project metadata, tracks, and audio takes, and uploads them to Kizuna Cloud (Issue #13).
 func (h *SyncHandler) PushProjectToCloud(cloudURL string, token string, songID int, baseVersion int) (*models.CloudPushResult, error) {
 	log.Printf("[SyncHandler] Initiating cloud backup for song ID %d to %s", songID, cloudURL)
@@ -96,4 +103,37 @@ func (h *SyncHandler) ShareProject(cloudID string, collaboratorIdentifier string
 		ctx = context.Background()
 	}
 	return h.syncService.ShareProject(ctx, h.lastCloudURL, h.lastToken, cloudID, collaboratorIdentifier)
+}
+
+// CheckoutProject requests an exclusive checkout lease on a remote cloud project (Issue #16).
+func (h *SyncHandler) CheckoutProject(cloudURL string, token string, projectID int) (*models.ProjectLock, error) {
+	log.Printf("[SyncHandler] Checking out cloud project ID %d on %s", projectID, cloudURL)
+	h.SetCloudSession(cloudURL, token)
+	ctx := h.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return h.syncService.CheckoutProject(ctx, h.lastCloudURL, h.lastToken, projectID)
+}
+
+// ReleaseProjectLock releases an active checkout lease on a remote cloud project (Issue #22).
+func (h *SyncHandler) ReleaseProjectLock(cloudURL string, token string, projectID int) error {
+	log.Printf("[SyncHandler] Releasing checkout lock for cloud project ID %d on %s", projectID, cloudURL)
+	h.SetCloudSession(cloudURL, token)
+	ctx := h.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return h.syncService.ReleaseProjectLock(ctx, h.lastCloudURL, h.lastToken, projectID)
+}
+
+// GetProjectLockStatus checks whether a remote cloud project is currently locked (Issue #16).
+func (h *SyncHandler) GetProjectLockStatus(cloudURL string, token string, projectID int) (*models.ProjectLock, error) {
+	log.Printf("[SyncHandler] Querying lock status for cloud project ID %d on %s", projectID, cloudURL)
+	h.SetCloudSession(cloudURL, token)
+	ctx := h.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return h.syncService.GetProjectLockStatus(ctx, h.lastCloudURL, h.lastToken, projectID)
 }

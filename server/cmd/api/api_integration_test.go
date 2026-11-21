@@ -249,4 +249,99 @@ func TestKizunaCloudAPI_EndToEndFlow(t *testing.T) {
 			t.Errorf("expected 404 Not Found, got %d", resp3.StatusCode)
 		}
 	})
+
+	// 9. Test Collaborative Checkout Lock Rejection & Auto-Release on Push (Issues #16, #22)
+	t.Run("Checkout conflict and auto-release on push", func(t *testing.T) {
+		// Register second user (collaborator)
+		regBody, _ := json.Marshal(map[string]string{
+			"username": "ritchie_blackmore",
+			"email":    "ritchie@deep-purple.com",
+			"password": "guitarpassword123",
+		})
+		regResp, err := client.Post(server.URL+"/api/v1/auth/register", "application/json", bytes.NewReader(regBody))
+		if err != nil {
+			t.Fatalf("second user registration failed: %v", err)
+		}
+		defer regResp.Body.Close()
+
+		var regEnv apiEnvelope
+		_ = json.NewDecoder(regResp.Body).Decode(&regEnv)
+		var authData2 struct {
+			Token string `json:"token"`
+		}
+		_ = json.Unmarshal(regEnv.Data, &authData2)
+		token2 := authData2.Token
+
+		// User 1 acquires checkout lock
+		checkoutURL := fmt.Sprintf("%s/api/v1/projects/%d/checkout", server.URL, projectID)
+		reqLock1, _ := http.NewRequest("POST", checkoutURL, nil)
+		reqLock1.Header.Set("Authorization", "Bearer "+authToken)
+		respLock1, err := client.Do(reqLock1)
+		if err != nil || respLock1.StatusCode != http.StatusOK {
+			t.Fatalf("user 1 failed to acquire checkout lock: %v (status %d)", err, respLock1.StatusCode)
+		}
+		respLock1.Body.Close()
+
+		// User 2 attempts to checkout while User 1 holds lock -> 409 Conflict (Issue #16)
+		reqLock2, _ := http.NewRequest("POST", checkoutURL, nil)
+		reqLock2.Header.Set("Authorization", "Bearer "+token2)
+		respLock2, err := client.Do(reqLock2)
+		if err != nil {
+			t.Fatalf("user 2 checkout request failed: %v", err)
+		}
+		defer respLock2.Body.Close()
+		if respLock2.StatusCode != http.StatusConflict {
+			t.Errorf("expected 409 Conflict when user 2 checks out locked project, got %d", respLock2.StatusCode)
+		}
+
+		// User 2 attempts to push while User 1 holds lock -> 409 Conflict (Issue #16)
+		pushBody2, _ := json.Marshal(sync.PushRequest{
+			ProjectID:   projectID,
+			Title:       "Highway Star (Unauthorized Overwrite)",
+			BPM:         175,
+			BaseVersion: 1,
+		})
+		reqPush2, _ := http.NewRequest("POST", server.URL+"/api/v1/sync/push", bytes.NewReader(pushBody2))
+		reqPush2.Header.Set("Authorization", "Bearer "+token2)
+		reqPush2.Header.Set("Content-Type", "application/json")
+		respPush2, err := client.Do(reqPush2)
+		if err != nil {
+			t.Fatalf("user 2 push request failed: %v", err)
+		}
+		defer respPush2.Body.Close()
+		if respPush2.StatusCode != http.StatusConflict {
+			t.Errorf("expected 409 Conflict when user 2 pushes to locked project, got %d", respPush2.StatusCode)
+		}
+
+		// User 1 pushes update -> succeeds AND auto-releases the lock (Issue #22)
+		pushBody1, _ := json.Marshal(sync.PushRequest{
+			ProjectID:   projectID,
+			Title:       "Highway Star (v2 Lead Added)",
+			BPM:         175,
+			BaseVersion: 1,
+		})
+		reqPush1, _ := http.NewRequest("POST", server.URL+"/api/v1/sync/push", bytes.NewReader(pushBody1))
+		reqPush1.Header.Set("Authorization", "Bearer "+authToken)
+		reqPush1.Header.Set("Content-Type", "application/json")
+		respPush1, err := client.Do(reqPush1)
+		if err != nil {
+			t.Fatalf("user 1 push failed: %v", err)
+		}
+		defer respPush1.Body.Close()
+		if respPush1.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 OK on user 1 push, got %d", respPush1.StatusCode)
+		}
+
+		// Now that User 1's push auto-released the lock, User 2 can acquire checkout lock (Issue #22)
+		reqLock2Retry, _ := http.NewRequest("POST", checkoutURL, nil)
+		reqLock2Retry.Header.Set("Authorization", "Bearer "+token2)
+		respLock2Retry, err := client.Do(reqLock2Retry)
+		if err != nil {
+			t.Fatalf("user 2 retry checkout failed: %v", err)
+		}
+		defer respLock2Retry.Body.Close()
+		if respLock2Retry.StatusCode != http.StatusOK {
+			t.Errorf("expected 200 OK for user 2 checkout after auto-release, got %d", respLock2Retry.StatusCode)
+		}
+	})
 }

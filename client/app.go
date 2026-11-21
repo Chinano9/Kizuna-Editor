@@ -115,9 +115,29 @@ func (a *App) ShareProject(cloudID string, collaboratorIdentifier string) error 
 	return a.syncHandler.ShareProject(cloudID, collaboratorIdentifier)
 }
 
+// CheckoutProject requests an exclusive checkout lease on a remote cloud project (Issue #16).
+func (a *App) CheckoutProject(cloudURL string, token string, projectID int) (*models.ProjectLock, error) {
+	return a.syncHandler.CheckoutProject(cloudURL, token, projectID)
+}
+
+// ReleaseProjectLock releases an active checkout lease on a remote cloud project (Issue #22).
+func (a *App) ReleaseProjectLock(cloudURL string, token string, projectID int) error {
+	return a.syncHandler.ReleaseProjectLock(cloudURL, token, projectID)
+}
+
+// GetProjectLockStatus checks whether a remote cloud project is currently locked (Issue #16).
+func (a *App) GetProjectLockStatus(cloudURL string, token string, projectID int) (*models.ProjectLock, error) {
+	return a.syncHandler.GetProjectLockStatus(cloudURL, token, projectID)
+}
+
 // SetCloudSession configures active session parameters in the sync presentation facade.
 func (a *App) SetCloudSession(cloudURL string, token string) {
 	a.syncHandler.SetCloudSession(cloudURL, token)
+}
+
+// SetCloudProjectID maps a local SQLite song ID to its remote Kizuna Cloud project ID.
+func (a *App) SetCloudProjectID(songID int, cloudProjectID int) {
+	a.syncHandler.SetCloudProjectID(songID, cloudProjectID)
 }
 
 // --- Song Operations (Delegated to SongHandler) ---

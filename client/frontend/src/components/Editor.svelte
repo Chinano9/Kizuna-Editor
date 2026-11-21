@@ -21,9 +21,10 @@
     import "../styles/editor-theme.css";
 
     import type { Track } from "@shared/types/wails";
-    import { activeSongStore, autoSaveStore } from "@/stores/projectStore";
+    import { song, activeSongStore, autoSaveStore } from "@/stores/projectStore";
     import { instrumentStore } from "@/stores/instrumentStore";
     import { looksLikeAlphaTex } from "@shared/lib/musicUtils";
+    import { syncStore, isSongReadOnly } from "@/features/cloud-sync/stores/syncStore";
 
     import Toolbar from "./Toolbar.svelte";
 
@@ -47,6 +48,11 @@
     $: isAlphaTexMode = instrumentName !== "Vocals" && looksLikeAlphaTex(content);
     $: lineCount = content ? content.split("\n").length : 1;
     $: wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
+
+    $: activeCloudId = Number(
+        $activeSongStore?.cloud_id || ($song?.id ? syncStore.getCloudIdForSong($song.id) : 0) || 0
+    );
+    $: isReadOnly = isSongReadOnly($syncStore, activeCloudId);
 
     function handleInput() {
         if (!track) return;
@@ -220,16 +226,44 @@
         </button>
     </div>
 
+    {#if $syncStore.isLockedByOther}
+        <div class="lock-warning-banner" role="alert">
+            <span>
+                ⚠️ <strong>Proyecto bloqueado por {$syncStore.lockedBy || "otro colaborador"}:</strong>
+                Edición deshabilitada temporalmente para evitar colisiones.
+            </span>
+        </div>
+    {:else if activeCloudId > 0 && $syncStore.isOffline}
+        <div class="lock-offline-banner" role="status">
+            <span>
+                ⚡ <strong>Modo Local-First (Sin conexión a Kizuna Cloud):</strong>
+                Edición local habilitada. Tus cambios se validarán al reconectar y sincronizar.
+            </span>
+        </div>
+    {:else if isReadOnly}
+        <div class="lock-readonly-banner" role="status">
+            <span>
+                🔒 <strong>Modo solo lectura (Candado liberado):</strong>
+                Haz clic en <strong>"🔒 Editar (Check-out)"</strong> en la barra superior para adquirir el candado y poder editar.
+            </span>
+        </div>
+    {/if}
+
     {#if track}
         <textarea
             bind:this={textareaEl}
             class="editor-textarea"
             bind:value={track.data_content}
+            disabled={isReadOnly}
             on:input={handleInput}
             on:paste={handlePaste}
             on:keydown={handleKeydown}
             spellcheck="false"
-            placeholder={instrumentName === "Vocals"
+            placeholder={isReadOnly
+                ? $syncStore.isLockedByOther
+                    ? `Bloqueado por ${$syncStore.lockedBy || "otro colaborador"} (Modo solo lectura)...`
+                    : "Haz clic en '🔒 Editar (Check-out)' para adquirir el candado y editar..."
+                : instrumentName === "Vocals"
                 ? "Escribe tu letra y acordes sin distracciones (ej. [Am] Bajo el cielo gris)..."
                 : 'Escribe AlphaTex o acordes aquí (ej. \\title "Mi Canción" \\tempo 120 . :4 0.6 2.6 3.6 5.6)...'}
         />
@@ -361,6 +395,51 @@
         color: var(--lcd-amber, #ffc966);
         border-color: var(--lcd-amber, #ffc966);
         background: rgba(255, 201, 102, 0.12);
+    }
+
+    .lock-warning-banner {
+        background: rgba(255, 85, 85, 0.14);
+        border-bottom: 1px solid #ff6b6b;
+        color: #ff9b9b;
+        padding: 8px 14px;
+        font-family: var(--lcd-font-ui);
+        font-size: 0.88rem;
+        line-height: 1.4;
+        letter-spacing: 0.03em;
+    }
+
+    .lock-warning-banner strong {
+        color: #ffc966;
+    }
+
+    .lock-readonly-banner {
+        background: rgba(255, 184, 108, 0.12);
+        border-bottom: 1px solid #ffb86c;
+        color: #ffd8a8;
+        padding: 8px 14px;
+        font-family: var(--lcd-font-ui);
+        font-size: 0.88rem;
+        line-height: 1.4;
+        letter-spacing: 0.03em;
+    }
+
+    .lock-readonly-banner strong {
+        color: #ffb86c;
+    }
+
+    .lock-offline-banner {
+        background: rgba(200, 255, 159, 0.1);
+        border-bottom: 1px solid var(--lcd-border-strong, #4a7856);
+        color: var(--lcd-text, #c8ff9f);
+        padding: 8px 14px;
+        font-family: var(--lcd-font-ui);
+        font-size: 0.88rem;
+        line-height: 1.4;
+        letter-spacing: 0.03em;
+    }
+
+    .lock-offline-banner strong {
+        color: var(--lcd-amber, #ffc966);
     }
 
     .editor-textarea {

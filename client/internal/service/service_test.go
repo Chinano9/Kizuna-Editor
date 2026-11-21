@@ -103,6 +103,19 @@ func TestSongService_SaveQuickIdeaAndSaveSong(t *testing.T) {
 	if len(updatedSong.Tracks) != 1 {
 		t.Errorf("expected 1 track after deletion, got %d", len(updatedSong.Tracks))
 	}
+
+	// 5. Issue #21: Re-saving the exact same song content preserves ContentHash (no false-positive diff)
+	hashBeforeNoOpSave := updatedSong.ContentHash
+	if len(hashBeforeNoOpSave) != 16 {
+		t.Fatalf("expected 16-char ContentHash on saved song, got %q", hashBeforeNoOpSave)
+	}
+	reSavedSong, err := songService.SaveSong(ctx, updatedSong)
+	if err != nil {
+		t.Fatalf("failed to re-save song: %v", err)
+	}
+	if reSavedSong.ContentHash != hashBeforeNoOpSave {
+		t.Errorf("expected ContentHash to remain identical on no-op save: before=%q, after=%q", hashBeforeNoOpSave, reSavedSong.ContentHash)
+	}
 }
 
 func TestTrackService(t *testing.T) {

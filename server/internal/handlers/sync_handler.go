@@ -52,7 +52,7 @@ func (h *SyncHandler) Push(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.syncEngine.Push(user.ID, req)
+	res, err := h.syncEngine.Push(user.ID, req, user.Email, user.Username)
 	if err != nil {
 		if errors.Is(err, sync.ErrVersionConflict) || errors.Is(err, collaboration.ErrProjectLocked) {
 			response.Error(w, http.StatusConflict, err.Error())
@@ -106,8 +106,9 @@ func (h *SyncHandler) Diff(w http.ResponseWriter, r *http.Request) {
 
 	verStr := r.URL.Query().Get("client_version")
 	clientVersion, _ := strconv.Atoi(verStr)
+	clientHash := r.URL.Query().Get("client_hash")
 
-	diff, err := h.syncEngine.GetDiff(projectID, clientVersion)
+	diff, err := h.syncEngine.GetDiff(projectID, clientVersion, clientHash)
 	if err != nil {
 		if errors.Is(err, sync.ErrProjectNotFound) {
 			response.Error(w, http.StatusNotFound, "cloud project not found")

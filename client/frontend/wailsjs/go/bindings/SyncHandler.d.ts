@@ -3,13 +3,21 @@
 import {models} from '../models';
 import {context} from '../models';
 
+export function CheckoutProject(arg1:string,arg2:string,arg3:number):Promise<models.ProjectLock>;
+
 export function GetEncryptionKeyFingerprint():Promise<string>;
+
+export function GetProjectLockStatus(arg1:string,arg2:string,arg3:number):Promise<models.ProjectLock>;
 
 export function ListCloudProjects(arg1:string,arg2:string):Promise<Array<models.CloudProject>>;
 
 export function PullAndImportProject(arg1:string,arg2:string,arg3:number):Promise<number>;
 
 export function PushProjectToCloud(arg1:string,arg2:string,arg3:number,arg4:number):Promise<models.CloudPushResult>;
+
+export function ReleaseProjectLock(arg1:string,arg2:string,arg3:number):Promise<void>;
+
+export function SetCloudProjectID(arg1:number,arg2:number):Promise<void>;
 
 export function SetCloudSession(arg1:string,arg2:string):Promise<void>;
 

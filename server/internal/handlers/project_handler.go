@@ -52,7 +52,7 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projects, err := h.syncEngine.ListUserProjects(user.ID)
+	projects, err := h.syncEngine.ListUserProjects(user.ID, user.Email, user.Username)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to list projects", err.Error())
 		return
@@ -115,7 +115,11 @@ func (h *ProjectHandler) CheckoutProject(w http.ResponseWriter, r *http.Request)
 	lock, err := h.locker.AcquireLock(projectID, user.ID, user.Username, 30*time.Minute)
 	if err != nil {
 		if errors.Is(err, collaboration.ErrProjectLocked) {
-			response.Error(w, http.StatusConflict, err.Error())
+			holder := ""
+			if activeLock, exists := h.locker.GetLock(projectID); exists && activeLock != nil {
+				holder = activeLock.Username
+			}
+			response.Error(w, http.StatusConflict, err.Error(), holder)
 			return
 		}
 		response.Error(w, http.StatusInternalServerError, "failed to acquire lock", err.Error())
